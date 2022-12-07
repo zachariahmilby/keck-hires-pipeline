@@ -1,1 +1,1 @@
-from hirespipeline.pipeline import HIRESPipeline
+# from hirespipeline.pipeline import HIRESPipeline

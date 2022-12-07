@@ -2,3 +2,5 @@
 .idea
 *.pyc
 .pytest_cache
+build
+*.egg*
