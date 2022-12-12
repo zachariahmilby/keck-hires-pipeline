@@ -7,6 +7,7 @@ from astropy.nddata import CCDData, StdDevUncertainty
 from lmfit.models import GaussianModel, PolynomialModel
 from scipy.signal import find_peaks
 from sklearn.preprocessing import minmax_scale
+from hirespipeline.files import make_directory
 
 
 class _OrderTraces:
@@ -152,7 +153,9 @@ class _OrderTraces:
         axis.pcolormesh(self._master_trace, cmap=cmap)
         for trace in self._traces:
             axis.plot(self._pixels, trace, color='red', linewidth=0.5)
-        plt.savefig(Path(file_path, 'order_traces.jpg'), dpi=600)
+        savepath = Path(file_path, 'quality_assurance', 'order_traces.jpg')
+        make_directory(savepath.parent)
+        plt.savefig(savepath, dpi=600)
         plt.close(fig)
 
     @property
@@ -251,7 +254,9 @@ class _OrderBounds:
                       linewidth=0.5)
             axis.plot(self._order_traces.pixels, lb, color='red',
                       linewidth=0.5)
-        plt.savefig(Path(file_path, 'order_edges.jpg'), dpi=600)
+        savepath = Path(file_path, 'quality_assurance', 'order_edges.jpg')
+        make_directory(savepath.parent)
+        plt.savefig(savepath, dpi=600)
         plt.close(fig)
 
     @property

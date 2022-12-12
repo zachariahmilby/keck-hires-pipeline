@@ -13,6 +13,7 @@ from sklearn.preprocessing import minmax_scale
 
 from hirespipeline.general import package_directory
 from hirespipeline.order_tracing import _OrderBounds
+from hirespipeline.files import make_directory
 
 
 class _WavelengthSolution:
@@ -185,8 +186,10 @@ class _WavelengthSolution:
             wl = f'{self._wavelength_solution_centers[i][-1]:.4f} nm'
             axis.text(x, y, wl, ha='right', va='center_baseline', fontsize=6,
                       color='blue')
-        plt.savefig(Path(file_path, 'order_numbers_and_wavelength_bounds.jpg'),
-                    dpi=600)
+        savepath = Path(file_path, 'quality_assurance',
+                        'order_numbers_and_wavelength_bounds.jpg')
+        make_directory(savepath.parent)
+        plt.savefig(savepath, dpi=600)
         plt.close(fig)
 
     @property

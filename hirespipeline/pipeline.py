@@ -47,6 +47,7 @@ def _calibration_qa_graphic(rectified_data: CCDData,
         plt.colorbar(img1, ax=axes[1],
                      label=f'{rectified_data.uncertainty.unit}')
         axes[1].set_title('Uncertainty')
+        make_directory(savename.parent)
         plt.savefig(savename)
 
 
@@ -80,6 +81,7 @@ def _science_qa_graphic(rectified_data: CCDData,
         axes[0].set_title('Data')
         axes[1].set_title('Uncertainty')
         axes[2].set_title('Signal-to-Noise')
+        make_directory(savename.parent)
         plt.savefig(savename)
 
 
@@ -175,13 +177,16 @@ class HIRESPipeline:
         master_trace = _make_master_trace(
             file_directory=self._file_directory, master_bias=master_bias)
         order_traces = _OrderTraces(master_trace=master_trace)
+        order_traces.quality_assurance(Path(self._save_directory))
         order_bounds = _OrderBounds(order_traces=order_traces,
                                     master_flat=master_flat)
+        order_bounds.quality_assurance(Path(self._save_directory))
 
         print('   Calculating wavelength solution...')
         wavelength_solution = _WavelengthSolution(master_arc=master_arc,
                                                   master_flat=master_flat,
                                                   order_bounds=order_bounds)
+        wavelength_solution.quality_assurance(Path(self._save_directory))
 
         print('   Rectifying master bias...')
         rectified_master_bias = order_bounds.rectify(master_bias)
@@ -192,7 +197,8 @@ class HIRESPipeline:
             savepath=Path(self._save_directory, 'master_bias.fits.gz'))
         _calibration_qa_graphic(
             rectified_data=rectified_master_bias, cmap=_bias_cmap(),
-            savename=Path(self._save_directory, 'master_bias.jpg'))
+            savename=Path(self._save_directory, 'quality_assurance',
+                          'master_bias.jpg'))
 
         print('   Rectifying master flat...')
         rectified_master_flat = order_bounds.rectify(master_flat)
@@ -203,7 +209,8 @@ class HIRESPipeline:
             savepath=Path(self._save_directory, 'master_flat.fits.gz'))
         _calibration_qa_graphic(
             rectified_data=rectified_master_flat, cmap=_flux_cmap(),
-            savename=Path(self._save_directory, 'master_flux.jpg'))
+            savename=Path(self._save_directory, 'quality_assurance',
+                          'master_flat.jpg'))
 
         print('   Rectifying master arc...')
         rectified_master_arc = order_bounds.rectify(master_arc)
@@ -214,7 +221,8 @@ class HIRESPipeline:
             savepath=Path(self._save_directory, 'master_arc.fits.gz'))
         _calibration_qa_graphic(
             rectified_data=rectified_master_arc, cmap=_flux_cmap(),
-            savename=Path(self._save_directory, 'master_arc.jpg'))
+            savename=Path(self._save_directory, 'quality_assurance',
+                          'master_arc.jpg'))
 
         for target, sub_directory in zip(self._target,
                                          self._science_subdirectory):
