@@ -3,7 +3,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
-from astropy.nddata import CCDData
+from astropy.nddata import CCDData, StdDevUncertainty
 from lmfit.models import GaussianModel, PolynomialModel
 from scipy.signal import find_peaks
 from sklearn.preprocessing import minmax_scale
@@ -187,7 +187,7 @@ class _OrderBounds:
                 lower = j-slit_half_width
                 if lower < 0:
                     lower = 0
-                upper = j+slit_half_width
+                upper = j+slit_half_width+1
                 if upper >= artificial_flatfield.shape[0]:
                     upper = artificial_flatfield.shape[0]
                 artificial_flatfield[lower:upper, i] = 1
@@ -212,15 +212,28 @@ class _OrderBounds:
         lower_bounds -= half_width + offset
         return upper_bounds, lower_bounds
 
-    def rectify_data(self, ccd_data: np.ndarray) -> np.ndarray:
+    def rectify(self, ccd_data: CCDData) -> CCDData:
+        """
+        Rectify a CCDData object using the calculated order bounds.
+        """
         rectified_data = []
+        rectified_uncertainty = []
         for ub, lb in zip(self._upper_bounds, self.lower_bounds):
-            rectified_order = np.zeros(
+            rectified_order_data = np.zeros(
+                (self._slit_length + 1, self._n_pixels))
+            rectified_order_unc = np.zeros(
                 (self._slit_length + 1, self._n_pixels))
             for i in range(self._n_pixels):
-                rectified_order[:, i] = ccd_data[lb[i]:ub[i], i]
-            rectified_data.append(rectified_order)
-        return np.array(rectified_data)
+                rectified_order_data[:, i] = ccd_data.data[lb[i]:ub[i], i]
+                rectified_order_unc[:, i] = \
+                    ccd_data.uncertainty.array[lb[i]:ub[i], i]
+            rectified_data.append(rectified_order_data)
+            rectified_uncertainty.append(rectified_order_unc)
+        rectified_data = np.array(rectified_data)
+        rectified_uncertainty = StdDevUncertainty(
+            np.array(rectified_uncertainty))
+        return CCDData(data=rectified_data, uncertainty=rectified_uncertainty,
+                       unit=ccd_data.unit, header=ccd_data.header.copy())
 
     # noinspection DuplicatedCode
     def quality_assurance(self, file_path: Path):

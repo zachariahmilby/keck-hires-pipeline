@@ -43,7 +43,7 @@ class _WavelengthSolution:
         dimension. Also normalize them.
         """
         spectra = np.zeros(self._order_bounds.lower_bounds.shape, dtype=float)
-        rectified_arcs = self._order_bounds.rectify_data(self._master_arc.data)
+        rectified_arcs = self._order_bounds.rectify(self._master_arc).data
         for i, spectrum in enumerate(rectified_arcs):
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
@@ -156,8 +156,8 @@ class _WavelengthSolution:
             p = fit_p(p_init, template_x, template_y,
                       template['wavelength_solution'])
 
-        fit_centers = p(xc, yc)
-        fit_edges = p(xe, ye)
+        fit_centers = np.round(p(xc, yc), 4)
+        fit_edges = np.round(p(xe, ye), 4)
         return fit_centers, fit_edges
 
     # noinspection DuplicatedCode

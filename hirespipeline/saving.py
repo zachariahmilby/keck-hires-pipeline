@@ -4,17 +4,17 @@ from pathlib import Path
 import numpy as np
 from astropy.io import fits
 
-from hirespipeline.files import _make_directory
+from hirespipeline.files import make_directory
 
 
-def _fix_nonprimary_header_2d(header: fits.Header, unit: str):
+def fix_nonprimary_header_2d(header: fits.Header, unit: str):
     header['NAXIS1'] = (header['NAXIS1'], 'number of spectral bins')
     header['NAXIS2'] = (header['NAXIS2'], 'number of spatial bins')
     header['NAXIS3'] = (header['NAXIS3'], 'number of echelle orders')
     header.append(('BUNIT', f'{unit}', 'data physical units'))
 
 
-def _fix_nonprimary_header_1d(header: fits.Header, unit: str):
+def fix_nonprimary_header_1d(header: fits.Header, unit: str):
     header['NAXIS1'] = (header['NAXIS1'], 'number of spectral bin centers')
     header['NAXIS2'] = (header['NAXIS2'], 'number of echelle orders')
     header.append(('BUNIT', f'{unit}', 'data physical units'))
@@ -23,8 +23,7 @@ def _fix_nonprimary_header_1d(header: fits.Header, unit: str):
 # noinspection PyTypeChecker
 def _save_as_fits(data_header: dict, data: np.ndarray, uncertainty: np.ndarray,
                   unit: str or None, data_type: str, savepath: Path,
-                  target: str = None, raw_data: np.ndarray = None,
-                  raw_uncertainty: np.ndarray = None,
+                  target: str = None,
                   wavelength_centers: np.ndarray = None,
                   wavelength_edges: np.ndarray = None,
                   order_numbers: np.ndarray = None):
@@ -51,12 +50,12 @@ def _save_as_fits(data_header: dict, data: np.ndarray, uncertainty: np.ndarray,
         except KeyError:
             pass
         try:
-            header.append(('EXPTIME', f"{data_header['exposure_time']}",
+            header.append(('EXPTIME', data_header['exposure_time'],
                            'exposure time [seconds]'))
         except KeyError:
             pass
         try:
-            header.append(('AIRMASS', f"{data_header['airmass']}",
+            header.append(('AIRMASS', data_header['airmass'],
                            'airmass'))
         except KeyError:
             pass
@@ -89,18 +88,7 @@ def _save_as_fits(data_header: dict, data: np.ndarray, uncertainty: np.ndarray,
 
         # data uncertainty
         primary_unc_hdu = fits.ImageHDU(uncertainty, name='PRIMARY_UNC')
-        _fix_nonprimary_header_2d(primary_unc_hdu.header, unit)
-
-        # raw data
-        if raw_data is not None:
-            raw_data_hdu = fits.ImageHDU(raw_data, name='RAW')
-            _fix_nonprimary_header_2d(raw_data_hdu.header, unit)
-
-            raw_unc_hdu = fits.ImageHDU(raw_uncertainty, name='RAW_UNC')
-            _fix_nonprimary_header_2d(raw_unc_hdu.header, unit)
-        else:
-            raw_data_hdu = None
-            raw_unc_hdu = None
+        fix_nonprimary_header_2d(primary_unc_hdu.header, unit)
 
         # echelle orders
         if order_numbers is not None:
@@ -109,11 +97,11 @@ def _save_as_fits(data_header: dict, data: np.ndarray, uncertainty: np.ndarray,
         else:
             echelle_orders_hdu = None
 
-        # wavelenth solution bin centers
+        # wavelength solution bin centers
         if wavelength_centers is not None:
             wavelength_centers_hdu = fits.ImageHDU(
                 wavelength_centers, name='BIN_CENTER_WAVELENGTHS')
-            _fix_nonprimary_header_1d(wavelength_centers_hdu.header, 'nm')
+            fix_nonprimary_header_1d(wavelength_centers_hdu.header, 'nm')
         else:
             wavelength_centers_hdu = None
 
@@ -121,15 +109,14 @@ def _save_as_fits(data_header: dict, data: np.ndarray, uncertainty: np.ndarray,
         if wavelength_edges is not None:
             wavelength_edges_hdu = fits.ImageHDU(
                 wavelength_edges, name='BIN_EDGE_WAVELENGTHS')
-            _fix_nonprimary_header_1d(wavelength_centers_hdu.header, 'nm')
+            fix_nonprimary_header_1d(wavelength_centers_hdu.header, 'nm')
         else:
             wavelength_edges_hdu = None
 
-        hdus = [primary_hdu, primary_unc_hdu, raw_data_hdu, raw_unc_hdu,
-                echelle_orders_hdu, wavelength_centers_hdu,
-                wavelength_edges_hdu]
+        hdus = [primary_hdu, primary_unc_hdu, echelle_orders_hdu,
+                wavelength_centers_hdu, wavelength_edges_hdu]
         usable_hdus = [i for i in hdus if i is not None]
         hdul = fits.HDUList(usable_hdus)
 
-        _make_directory(savepath.parent)
+        make_directory(savepath.parent)
         hdul.writeto(savepath, overwrite=True)

@@ -2,35 +2,85 @@ import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 
-import ccdproc
+import matplotlib.colors as colors
+import matplotlib.pyplot as plt
 import numpy as np
 from astropy.nddata import CCDData
 
-from hirespipeline.files import _make_directory
-from hirespipeline.general import readnoise
-from hirespipeline.image_processing import _combine_mosaic_image, \
-    _get_header, _make_median_image
+from hirespipeline.files import make_directory
+from hirespipeline.graphics import rcparams, _turn_off_axes, _calculate_norm, \
+    _bias_cmap, _flux_cmap
+from hirespipeline.image_processing import _make_master_bias, \
+    _make_master_flux, _make_master_trace, _process_science_data
 from hirespipeline.order_tracing import _OrderTraces, _OrderBounds
 from hirespipeline.saving import _save_as_fits
 from hirespipeline.wavelength_solution import _WavelengthSolution
 
 
-def _get_images_from_directory(
-        directory: Path, remove_cosmic_rays: bool = False) -> list[CCDData]:
-    """
-    Make a list of CCDData objects of combined mosaic data.
-    """
-    files = sorted(directory.glob('*.fits*'))
-    images = []
-    for file in files:
-        header = _get_header(file)
-        data = CCDData(_combine_mosaic_image(file), header=header)
-        if remove_cosmic_rays:
-            data = ccdproc.cosmicray_lacosmic(data)
-        data_with_uncertainty = ccdproc.create_deviation(
-            data, readnoise=readnoise, disregard_nan=True)
-        images.append(data_with_uncertainty)
-    return images
+def _stack_orders(rectified_data: np.ndarray, dy=3):
+    n_orders, n_spa, n_spe = rectified_data.shape
+    stacked_data = np.full(
+        (int(n_orders * n_spa + (n_orders - 1) * dy), n_spe),
+        fill_value=np.nan)
+    for i in range(n_orders):
+        stacked_data[i*(n_spa + dy):i*(n_spa + dy)+n_spa] = rectified_data[i]
+    return stacked_data
+
+
+def _calibration_qa_graphic(rectified_data: CCDData,
+                            cmap: colors.Colormap, savename: Path):
+    with plt.style.context(rcparams):
+        fig, axes = plt.subplots(1, 2, figsize=(8, 4),
+                                 constrained_layout=True, sharex='all',
+                                 sharey='all')
+        [_turn_off_axes(axis) for axis in axes.ravel()]
+        img0 = axes[0].pcolormesh(_stack_orders(rectified_data.data),
+                                  cmap=cmap,
+                                  norm=_calculate_norm(rectified_data.data),
+                                  rasterized=True)
+        img1 = axes[1].pcolormesh(
+            _stack_orders(rectified_data.uncertainty.array), cmap=cmap,
+            norm=_calculate_norm(rectified_data.uncertainty.array,),
+            rasterized=True)
+        plt.colorbar(img0, ax=axes[0], label=f'{rectified_data.unit}')
+        axes[0].set_title('Data')
+        plt.colorbar(img1, ax=axes[1],
+                     label=f'{rectified_data.uncertainty.unit}')
+        axes[1].set_title('Uncertainty')
+        plt.savefig(savename)
+
+
+def _science_qa_graphic(rectified_data: CCDData,
+                        cmap: colors.Colormap, savename: Path):
+    with plt.style.context(rcparams):
+        fig, axes = plt.subplots(1, 3, figsize=(12, 4),
+                                 constrained_layout=True, sharex='all',
+                                 sharey='all')
+        [_turn_off_axes(axis) for axis in axes.ravel()]
+        data = _stack_orders(rectified_data.data)
+        unc = _stack_orders(rectified_data.uncertainty.array)
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', category=RuntimeWarning)
+            snr = data/unc
+        img0 = axes[0].pcolormesh(data, cmap=cmap,
+                                  norm=_calculate_norm(rectified_data.data,
+                                                       percentile=95),
+                                  rasterized=True)
+        plt.colorbar(img0, ax=axes[0], label=f'{rectified_data.unit}')
+        img1 = axes[1].pcolormesh(
+            unc, cmap=cmap,
+            norm=_calculate_norm(rectified_data.uncertainty.array,
+                                 percentile=95),
+            rasterized=True)
+        plt.colorbar(img1, ax=axes[1], label=f'{rectified_data.unit}')
+        img2 = axes[2].pcolormesh(snr, cmap=cmap,
+                                  norm=_calculate_norm(snr, 95),
+                                  rasterized=True)
+        plt.colorbar(img2, ax=axes[2], label='Ratio')
+        axes[0].set_title('Data')
+        axes[1].set_title('Uncertainty')
+        axes[2].set_title('Signal-to-Noise')
+        plt.savefig(savename)
 
 
 class HIRESPipeline:
@@ -55,7 +105,7 @@ class HIRESPipeline:
         """
         self._target = self._determine_input_type(target)
         self._file_directory = Path(file_directory)
-        self._save_directory = _make_directory(
+        self._save_directory = make_directory(
             Path(Path(file_directory).parent, 'reduced'))
         self._science_subdirectory = self._determine_input_type(
             science_subdirectory)
@@ -78,31 +128,19 @@ class HIRESPipeline:
 
     @staticmethod
     def _save_master_calibration_file(
-            ccd_data: CCDData, order_bounds: _OrderBounds, data_type: str,
-            order_numbers: np.ndarray, savepath: str or Path):
-        rectified_data = order_bounds.rectify_data(ccd_data.data)
-        rectified_uncertainty = order_bounds.rectify_data(
-            ccd_data.uncertainty.array)
-        _save_as_fits(data_header=ccd_data.header, data=rectified_data,
-                      uncertainty=rectified_uncertainty, unit=ccd_data.unit,
-                      data_type=data_type, order_numbers=order_numbers,
-                      savepath=savepath)
+            ccd_data: CCDData, order_numbers: np.ndarray, data_type: str,
+            savepath: str or Path):
+        _save_as_fits(data_header=ccd_data.header, data=ccd_data.data,
+                      uncertainty=ccd_data.uncertainty.array,
+                      unit=ccd_data.unit, data_type=data_type,
+                      order_numbers=order_numbers, savepath=savepath)
 
     @staticmethod
     def _save_science_file(
-            reduced_data: CCDData, raw_data: CCDData,
-            order_bounds: _OrderBounds, target: str,
+            reduced_data: CCDData, target: str,
             wavelength_solution: _WavelengthSolution, savepath: str or Path):
-        rectified_data = order_bounds.rectify_data(reduced_data.data)
-        rectified_uncertainty = order_bounds.rectify_data(
-            reduced_data.uncertainty.array)
-        rectified_raw_data = order_bounds.rectify_data(raw_data.data)
-        rectified_raw_uncertainty = order_bounds.rectify_data(
-            raw_data.uncertainty.array)
-        _save_as_fits(data_header=reduced_data.header, data=rectified_data,
-                      uncertainty=rectified_uncertainty,
-                      raw_data=rectified_raw_data,
-                      raw_uncertainty=rectified_raw_uncertainty,
+        _save_as_fits(data_header=reduced_data.header, data=reduced_data.data,
+                      uncertainty=reduced_data.uncertainty.array,
                       unit=reduced_data.unit,
                       data_type='science', target=target,
                       order_numbers=wavelength_solution.order_numbers,
@@ -119,83 +157,97 @@ class HIRESPipeline:
         print(f'Running HIRES data reduction pipeline on '
               f'{str(self._file_directory)}')
 
-        print('   Making master bias...')
-        bias_images = _get_images_from_directory(
-            Path(self._file_directory, 'bias'))
-        master_bias = _make_median_image(bias_images)
+        # make master calibration detector images
+        print('   Making master bias image...')
+        master_bias = _make_master_bias(file_directory=self._file_directory)
 
-        print('   Making master flat...')
-        flat_images = _get_images_from_directory(
-            Path(self._file_directory, 'flat'))
-        master_flat = _make_median_image(flat_images)
-        master_flat = ccdproc.subtract_bias(master_flat, master=master_bias)
+        print('   Making master flat image...')
+        master_flat = _make_master_flux(file_directory=self._file_directory,
+                                        flux_type='flat',
+                                        master_bias=master_bias)
 
-        print('   Making master arc...')
-        arc_images = _get_images_from_directory(
-            Path(self._file_directory, 'arc'))
-        master_arc = _make_median_image(arc_images)
-        master_arc = ccdproc.subtract_bias(master_arc, master=master_bias)
+        print('   Making master arc image...')
+        master_arc = _make_master_flux(file_directory=self._file_directory,
+                                       flux_type='arc',
+                                       master_bias=master_bias)
 
         print('   Tracing echelle orders...')
-        master_trace = CCDData(
-            _combine_mosaic_image(
-                sorted(Path(self._file_directory, 'trace').glob('*fits*'))[0]))
-        master_trace = ccdproc.subtract_bias(master_trace, master=master_bias)
+        master_trace = _make_master_trace(
+            file_directory=self._file_directory, master_bias=master_bias)
         order_traces = _OrderTraces(master_trace=master_trace)
         order_bounds = _OrderBounds(order_traces=order_traces,
                                     master_flat=master_flat)
 
         print('   Calculating wavelength solution...')
-        wavelength_solution = _WavelengthSolution(
-            master_arc=master_arc, master_flat=master_flat,
-            order_bounds=order_bounds)
+        wavelength_solution = _WavelengthSolution(master_arc=master_arc,
+                                                  master_flat=master_flat,
+                                                  order_bounds=order_bounds)
 
-        print('   Saving calibration data...')
+        print('   Rectifying master bias...')
+        rectified_master_bias = order_bounds.rectify(master_bias)
         self._save_master_calibration_file(
-            ccd_data=master_bias, data_type='master bias',
-            order_bounds=order_bounds,
+            ccd_data=rectified_master_bias,
             order_numbers=wavelength_solution.order_numbers,
+            data_type='master bias',
             savepath=Path(self._save_directory, 'master_bias.fits.gz'))
+        _calibration_qa_graphic(
+            rectified_data=rectified_master_bias, cmap=_bias_cmap(),
+            savename=Path(self._save_directory, 'master_bias.jpg'))
+
+        print('   Rectifying master flat...')
+        rectified_master_flat = order_bounds.rectify(master_flat)
         self._save_master_calibration_file(
-            ccd_data=master_flat, data_type='master flat',
-            order_bounds=order_bounds,
+            ccd_data=rectified_master_flat,
             order_numbers=wavelength_solution.order_numbers,
+            data_type='master flat',
             savepath=Path(self._save_directory, 'master_flat.fits.gz'))
+        _calibration_qa_graphic(
+            rectified_data=rectified_master_flat, cmap=_flux_cmap(),
+            savename=Path(self._save_directory, 'master_flux.jpg'))
+
+        print('   Rectifying master arc...')
+        rectified_master_arc = order_bounds.rectify(master_arc)
         self._save_master_calibration_file(
-            ccd_data=master_arc, data_type='master arc',
-            order_bounds=order_bounds,
+            ccd_data=rectified_master_arc,
             order_numbers=wavelength_solution.order_numbers,
+            data_type='master arc',
             savepath=Path(self._save_directory, 'master_arc.fits.gz'))
+        _calibration_qa_graphic(
+            rectified_data=rectified_master_arc, cmap=_flux_cmap(),
+            savename=Path(self._save_directory, 'master_arc.jpg'))
 
-        print('   Saving quality assurance graphics...')
-        qa_path = _make_directory(
-            Path(self._save_directory, 'quality_assurance'))
-        order_traces.quality_assurance(qa_path)
-        order_bounds.quality_assurance(qa_path)
-        wavelength_solution.quality_assurance(qa_path)
-
-        for target, directory in zip(self._target, self._science_subdirectory):
-            print(f'   Reducing data in directory "{directory}"...')
-            science_images = _get_images_from_directory(
-                Path(self._file_directory, directory), remove_cosmic_rays=True)
-            savepath = _make_directory(Path(self._save_directory, directory))
-            count = len(science_images)
-            for i, ccd_image in enumerate(science_images):
-                filename = ccd_image.header['file_name']
-                print(f"      {i + 1}/{count}: {filename}")
-                bias_subtracted_data = ccdproc.subtract_bias(
-                    ccd_image, master=master_bias)
-                with warnings.catch_warnings():
-                    warnings.simplefilter('ignore', category=RuntimeWarning)
-                    flat_corrected_data = ccdproc.flat_correct(
-                        bias_subtracted_data, flat=master_flat,
-                        norm_value=np.nanmean(master_flat.data))
-                reduced_filename = self._reduced_filename(filename)
+        for target, sub_directory in zip(self._target,
+                                         self._science_subdirectory):
+            print(f'   Reducing data in "{sub_directory}" directory...')
+            science_images, filenames = _process_science_data(
+                file_directory=self._file_directory,
+                sub_directory=sub_directory,
+                master_bias=rectified_master_bias,
+                master_flat=rectified_master_flat,
+                order_bounds=order_bounds,
+                wavelength_solution=wavelength_solution)
+            for image, filename in zip(science_images, filenames):
                 self._save_science_file(
-                    reduced_data=flat_corrected_data, raw_data=ccd_image,
-                    order_bounds=order_bounds,
-                    target=target, wavelength_solution=wavelength_solution,
-                    savepath=Path(savepath, reduced_filename))
+                    reduced_data=image, target=target,
+                    wavelength_solution=wavelength_solution,
+                    savepath=Path(self._save_directory, sub_directory,
+                                  filename.replace('.fits.gz',
+                                                   '_reduced.fits.gz')))
+                _science_qa_graphic(
+                    rectified_data=image, cmap=_flux_cmap(),
+                    savename=Path(self._save_directory, sub_directory,
+                                  filename.replace('.fits.gz', '.jpg')))
 
         print(f'Processing complete, time elapsed '
               f'{datetime.now(timezone.utc) - t0}.')
+
+
+if __name__ == "__main__":
+    path = '/Users/zachariahmilby/Documents/School/Planetary Sciences PhD/' \
+           'Projects/Galilean Satellite Aurora (Katherine de Kleer)/HIRES/' \
+           'Data/Ganymede 2021-06-08/selected'
+    pipeline = HIRESPipeline(
+        target=['Jupiter', 'Ganymede', 'Io'], file_directory=path,
+        science_subdirectory=['flux_calibration', 'science', 'guide_satellite']
+    )
+    pipeline.run()

@@ -21,7 +21,7 @@ class _Files:
         return sorted(self._directory.glob(f'*.{self._file_type}*'))
 
 
-def _make_directory(directory: Path):
+def make_directory(directory: Path):
     if not directory.exists():
         directory.mkdir(parents=True)
     return directory

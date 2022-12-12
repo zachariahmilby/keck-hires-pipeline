@@ -6,8 +6,13 @@ import astropy.units as u
 import ccdproc
 import numpy as np
 from astropy.io import fits
-from astropy.nddata import CCDData
+from astropy.nddata import CCDData, StdDevUncertainty
 from astropy.time import Time
+
+from hirespipeline.airmass_extinction import _extinction_correct
+from hirespipeline.general import readnoise
+from hirespipeline.order_tracing import _OrderBounds
+from hirespipeline.wavelength_solution import _WavelengthSolution
 
 
 def _parse_mosaic_detector_slice(slice_string: str) -> tuple[slice, slice]:
@@ -107,30 +112,145 @@ def _combine_mosaic_image(file_path: Path) -> u.Quantity:
     return data_image * u.electron
 
 
+def _get_images_from_directory(
+        directory: Path, remove_cosmic_rays: bool = False) -> list[CCDData]:
+    """
+    Make a list of CCDData objects of combined mosaic data.
+    """
+    files = sorted(directory.glob('*.fits*'))
+    images = []
+    for file in files:
+        header = _get_header(file)
+        data = CCDData(_combine_mosaic_image(file), header=header)
+        if remove_cosmic_rays:
+            data = ccdproc.cosmicray_lacosmic(data)
+        data_with_uncertainty = ccdproc.create_deviation(
+            data, readnoise=readnoise, disregard_nan=True)
+        images.append(data_with_uncertainty)
+    return images
+
+
 def _remove_header_info_for_masters(header: dict) -> dict:
+    """
+    Remove datetime, exposure_time and airmass from the header for median
+    images, since they are no longer meaningful.
+    """
     header = deepcopy(header)
     remove = ['datetime', 'exposure_time', 'airmass']
     [header.pop(key) for key in remove]
     return header
 
 
-def _make_median_image(images: list[CCDData]) -> CCDData:
+def _calculate_median_uncertainty(
+        uncertainty: np.ndarray) -> StdDevUncertainty:
     """
-    Make a median master image from a directory of FITS files.
-
-    Parameters
-    ----------
-    images : list of CCDData objects
-        A list containing images as CCDData objects.
-
-    Returns
-    -------
-    median_image : CCDData
-        A CCDData object of the median image.
+    Calcualte uncertainty of median along an axis using the formula detailed in
+    https://mathworld.wolfram.com/StatisticalMedian.html
     """
-    combiner = ccdproc.Combiner(images)
+    n = uncertainty.shape[0]
+    mean_unc = np.sqrt(np.sum(uncertainty**2, axis=0)) / n
+    median_unc = mean_unc * np.sqrt(np.pi * (2 * n + 1) / (4 * n))
+    return StdDevUncertainty(median_unc)
+
+
+def _make_median_bias(bias_images: list[CCDData]) -> CCDData:
+    """
+    Make a median bias image from a list of CCDData objects.
+    """
+    warnings.simplefilter('ignore', category=RuntimeWarning)
+    median_ccd = ccdproc.combine(bias_images, method='median')
+    median_ccd.header = _remove_header_info_for_masters(
+        bias_images[0].header.copy())
+    return median_ccd
+
+
+def _make_median_flux(flux_images: list[CCDData]) -> CCDData:
+    """
+    Make a median flux image from a list of CCDData objects. This is
+    appropriate for flats or arcs, but not for bias.
+    """
     with warnings.catch_warnings():  # ignore all-NaN slices
         warnings.simplefilter('ignore', category=RuntimeWarning)
-        median_image = combiner.median_combine()
-    median_image.header = _remove_header_info_for_masters(images[0].header)
-    return median_image
+        data = np.array([ccd.data for ccd in flux_images])
+        # scale each image by its exposure time before calculating median
+        scales = np.array([1./ccd.header['exposure_time']
+                           for ccd in flux_images])
+        scales = np.tile(scales[:, None, None],
+                         (1, data.shape[1], data.shape[2]))
+        median_data = np.nanmedian(data*scales, axis=0)
+        uncertainty = np.array([ccd.uncertainty.array for ccd in flux_images])
+        median_uncertainty = _calculate_median_uncertainty(
+            uncertainty*scales)
+        median_ccd = CCDData(data=median_data, uncertainty=median_uncertainty,
+                             unit='electron')
+        median_ccd.header = _remove_header_info_for_masters(
+            flux_images[0].header.copy())
+    return median_ccd
+
+
+def _make_master_bias(file_directory: Path) -> CCDData:
+    """
+    Wrapper function to make a master bias detector image.
+    """
+    bias_images = _get_images_from_directory(Path(file_directory, 'bias'))
+    master_bias = _make_median_bias(bias_images)
+    return master_bias
+
+
+def _make_master_flux(file_directory: Path, flux_type: str,
+                      master_bias: CCDData) -> CCDData:
+    """
+    Wrapper function to make a master flat or arc detector image.
+    """
+    flux_images = _get_images_from_directory(Path(file_directory, flux_type))
+    flux_images = [ccdproc.subtract_bias(image, master=master_bias)
+                   for image in flux_images]
+    master_flux = _make_median_flux(flux_images)
+    return master_flux
+
+
+def _make_master_trace(file_directory: Path, master_bias: CCDData) -> CCDData:
+    """
+    Wrapper function to load the first trace file and make a master order trace
+    image.
+    """
+    trace_image = _get_images_from_directory(Path(file_directory, 'trace'))[0]
+    master_trace = ccdproc.subtract_bias(trace_image, master=master_bias)
+    return master_trace
+
+
+def _process_science_data(
+        file_directory: Path, sub_directory: str,
+        master_bias: CCDData, master_flat: CCDData,
+        order_bounds: _OrderBounds,
+        wavelength_solution: _WavelengthSolution) -> ([CCDData], [str]):
+    """
+    Wrapper function to apply all of the reduction steps to science data in a
+    supplied directory.
+    """
+    print(f'      Loading data and removing cosmic rays...')
+    science_images = _get_images_from_directory(
+        Path(file_directory, sub_directory), remove_cosmic_rays=True)
+    count = len(science_images)
+    reduced_science_images = []
+    filenames = []
+    for i, ccd_image in enumerate(science_images):
+        filename = ccd_image.header['file_name']
+        print(f'      Reducing image {i + 1}/{count}: {filename}')
+        rectified_data = order_bounds.rectify(ccd_data=ccd_image)
+        bias_subtracted_data = ccdproc.subtract_bias(
+            rectified_data, master=master_bias)
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', category=RuntimeWarning)
+            flat_corrected_data = ccdproc.flat_correct(
+                bias_subtracted_data, flat=master_flat,
+                norm_value=np.nanmean(master_flat.data))
+            flux_data = flat_corrected_data.divide(
+                flat_corrected_data.header['exposure_time'] * u.second)
+            flux_data.header = flat_corrected_data.header.copy()
+            extinction_corrected_data = _extinction_correct(
+                rectified_data=flux_data,
+                wavelength_solution=wavelength_solution)
+            reduced_science_images.append(extinction_corrected_data)
+            filenames.append(filename)
+    return reduced_science_images, filenames
