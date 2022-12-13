@@ -49,6 +49,7 @@ def _calibration_qa_graphic(rectified_data: CCDData,
         axes[1].set_title('Uncertainty')
         make_directory(savename.parent)
         plt.savefig(savename)
+        plt.close(fig)
 
 
 def _science_qa_graphic(rectified_data: CCDData,
@@ -83,6 +84,7 @@ def _science_qa_graphic(rectified_data: CCDData,
         axes[2].set_title('Signal-to-Noise')
         make_directory(savename.parent)
         plt.savefig(savename)
+        plt.close(fig)
 
 
 class HIRESPipeline:
@@ -248,14 +250,3 @@ class HIRESPipeline:
 
         print(f'Processing complete, time elapsed '
               f'{datetime.now(timezone.utc) - t0}.')
-
-
-if __name__ == "__main__":
-    path = '/Users/zachariahmilby/Documents/School/Planetary Sciences PhD/' \
-           'Projects/Galilean Satellite Aurora (Katherine de Kleer)/HIRES/' \
-           'Data/Ganymede 2021-06-08/selected'
-    pipeline = HIRESPipeline(
-        target=['Jupiter', 'Ganymede', 'Io'], file_directory=path,
-        science_subdirectory=['flux_calibration', 'science', 'guide_satellite']
-    )
-    pipeline.run()
