@@ -8,8 +8,8 @@ import numpy as np
 from astropy.nddata import CCDData
 
 from hirespipeline.files import make_directory
-from hirespipeline.graphics import rcparams, _turn_off_axes, _calculate_norm, \
-    _bias_cmap, _flux_cmap
+from hirespipeline.graphics import rcparams, turn_off_axes, calculate_norm, \
+    bias_cmap, flux_cmap
 from hirespipeline.image_processing import _make_master_bias, \
     _make_master_flux, _make_master_trace, _process_science_data
 from hirespipeline.order_tracing import _OrderTraces, _OrderBounds
@@ -17,7 +17,7 @@ from hirespipeline.saving import _save_as_fits
 from hirespipeline.wavelength_solution import _WavelengthSolution
 
 
-def _stack_orders(rectified_data: np.ndarray, dy=3):
+def stack_orders(rectified_data: np.ndarray, dy=3):
     n_orders, n_spa, n_spe = rectified_data.shape
     stacked_data = np.full(
         (int(n_orders * n_spa + (n_orders - 1) * dy), n_spe),
@@ -33,14 +33,14 @@ def _calibration_qa_graphic(rectified_data: CCDData,
         fig, axes = plt.subplots(1, 2, figsize=(8, 4),
                                  constrained_layout=True, sharex='all',
                                  sharey='all')
-        [_turn_off_axes(axis) for axis in axes.ravel()]
-        img0 = axes[0].pcolormesh(_stack_orders(rectified_data.data),
+        [turn_off_axes(axis) for axis in axes.ravel()]
+        img0 = axes[0].pcolormesh(stack_orders(rectified_data.data),
                                   cmap=cmap,
-                                  norm=_calculate_norm(rectified_data.data),
+                                  norm=calculate_norm(rectified_data.data),
                                   rasterized=True)
         img1 = axes[1].pcolormesh(
-            _stack_orders(rectified_data.uncertainty.array), cmap=cmap,
-            norm=_calculate_norm(rectified_data.uncertainty.array,),
+            stack_orders(rectified_data.uncertainty.array), cmap=cmap,
+            norm=calculate_norm(rectified_data.uncertainty.array, ),
             rasterized=True)
         plt.colorbar(img0, ax=axes[0], label=f'{rectified_data.unit}')
         axes[0].set_title('Data')
@@ -57,25 +57,25 @@ def _science_qa_graphic(rectified_data: CCDData,
         fig, axes = plt.subplots(1, 3, figsize=(12, 4),
                                  constrained_layout=True, sharex='all',
                                  sharey='all')
-        [_turn_off_axes(axis) for axis in axes.ravel()]
-        data = _stack_orders(rectified_data.data)
-        unc = _stack_orders(rectified_data.uncertainty.array)
+        [turn_off_axes(axis) for axis in axes.ravel()]
+        data = stack_orders(rectified_data.data)
+        unc = stack_orders(rectified_data.uncertainty.array)
         with warnings.catch_warnings():
             warnings.simplefilter('ignore', category=RuntimeWarning)
             snr = data/unc
         img0 = axes[0].pcolormesh(data, cmap=cmap,
-                                  norm=_calculate_norm(rectified_data.data,
-                                                       percentile=95),
+                                  norm=calculate_norm(rectified_data.data,
+                                                      percentile=95),
                                   rasterized=True)
         plt.colorbar(img0, ax=axes[0], label=f'{rectified_data.unit}')
         img1 = axes[1].pcolormesh(
             unc, cmap=cmap,
-            norm=_calculate_norm(rectified_data.uncertainty.array,
-                                 percentile=95),
+            norm=calculate_norm(rectified_data.uncertainty.array,
+                                percentile=95),
             rasterized=True)
         plt.colorbar(img1, ax=axes[1], label=f'{rectified_data.unit}')
         img2 = axes[2].pcolormesh(snr, cmap=cmap,
-                                  norm=_calculate_norm(snr, 95),
+                                  norm=calculate_norm(snr, 95),
                                   rasterized=True)
         plt.colorbar(img2, ax=axes[2], label='Ratio')
         axes[0].set_title('Data')
@@ -196,7 +196,7 @@ class HIRESPipeline:
             data_type='master bias',
             savepath=Path(self._save_directory, 'master_bias.fits.gz'))
         _calibration_qa_graphic(
-            rectified_data=rectified_master_bias, cmap=_bias_cmap(),
+            rectified_data=rectified_master_bias, cmap=bias_cmap(),
             savename=Path(self._save_directory, 'quality_assurance',
                           'master_bias.jpg'))
 
@@ -208,7 +208,7 @@ class HIRESPipeline:
             data_type='master flat',
             savepath=Path(self._save_directory, 'master_flat.fits.gz'))
         _calibration_qa_graphic(
-            rectified_data=rectified_master_flat, cmap=_flux_cmap(),
+            rectified_data=rectified_master_flat, cmap=flux_cmap(),
             savename=Path(self._save_directory, 'quality_assurance',
                           'master_flat.jpg'))
 
@@ -220,7 +220,7 @@ class HIRESPipeline:
             data_type='master arc',
             savepath=Path(self._save_directory, 'master_arc.fits.gz'))
         _calibration_qa_graphic(
-            rectified_data=rectified_master_arc, cmap=_flux_cmap(),
+            rectified_data=rectified_master_arc, cmap=flux_cmap(),
             savename=Path(self._save_directory, 'quality_assurance',
                           'master_arc.jpg'))
 
@@ -242,7 +242,7 @@ class HIRESPipeline:
                                   filename.replace('.fits.gz',
                                                    '_reduced.fits.gz')))
                 _science_qa_graphic(
-                    rectified_data=image, cmap=_flux_cmap(),
+                    rectified_data=image, cmap=flux_cmap(),
                     savename=Path(self._save_directory, sub_directory,
                                   filename.replace('.fits.gz', '.jpg')))
 

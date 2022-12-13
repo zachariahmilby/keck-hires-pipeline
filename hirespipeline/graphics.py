@@ -10,7 +10,7 @@ from hirespipeline.general import package_directory
 rcparams = Path(package_directory, 'anc', 'rcparams.mplstyle')
 
 
-def _turn_off_axes(axis: plt.Axes):
+def turn_off_axes(axis: plt.Axes):
     """
     Turn off ticks and tick numbers.
     """
@@ -18,7 +18,7 @@ def _turn_off_axes(axis: plt.Axes):
     axis.set_yticks([])
 
 
-def _calculate_norm(data: np.ndarray, percentile=99):
+def calculate_norm(data: np.ndarray, percentile=99):
     """
     Calculate a 99th-percentile linear normalization.
     """
@@ -27,7 +27,7 @@ def _calculate_norm(data: np.ndarray, percentile=99):
     return colors.Normalize(vmin=vmin, vmax=vmax)
 
 
-def _bias_cmap():
+def bias_cmap():
     """
     Colormap "cividis" for displaying bias data.
     """
@@ -36,7 +36,7 @@ def _bias_cmap():
     return cmap
 
 
-def _flux_cmap():
+def flux_cmap():
     """
     Colormap "viridis" for displaying flux data.
     """
