@@ -124,7 +124,7 @@ def _get_images_from_directory(
         data = CCDData(_combine_mosaic_image(file), header=header)
         if remove_cosmic_rays:
             data = ccdproc.cosmicray_lacosmic(data)
-        data[np.where(data == 0)] = np.nan  # set saturated pixels to NaN
+        data.data[np.where(data.data == 0)] = np.nan  # saturated pixels to NaN
         data_with_uncertainty = ccdproc.create_deviation(
             data, readnoise=readnoise, disregard_nan=True)
         images.append(data_with_uncertainty)
