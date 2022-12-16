@@ -3,17 +3,19 @@ import warnings
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
 import numpy as np
 from astropy.modeling import models, fitting
 from astropy.nddata import CCDData
 from astropy.utils.exceptions import AstropyUserWarning
-from lmfit.models import GaussianModel
+from lmfit.models import GaussianModel, PolynomialModel
 from scipy.signal import correlate
 from sklearn.preprocessing import minmax_scale
 
 from hirespipeline.general import package_directory
 from hirespipeline.order_tracing import _OrderBounds
 from hirespipeline.files import make_directory
+from hirespipeline.graphics import rcparams
 
 
 class _WavelengthSolution:
@@ -24,14 +26,13 @@ class _WavelengthSolution:
         self._master_flat = master_flat
         self._order_bounds = order_bounds
         self._pixels = np.arange(self._order_bounds.lower_bounds.shape[1])
-        self._pixel_edges = np.linspace(-0.5, self._pixels.shape[0]-0.5,
-                                        self._pixels.shape[0]+1)
+        self._pixel_edges = np.linspace(0, self._pixels.shape[0],
+                                        self._pixels.shape[0] + 1) - 0.5
         self._slit_half_width = self._get_slit_half_width()
         self._1d_arc_spectra = self._make_1d_spectra()
         self._order_numbers, self._spectral_offset = \
             self._identify_order_numbers()
-        self._wavelength_solution_centers, self._wavelength_solution_edges = \
-            self._calculate_wavelength_solution()
+        self._wavelength_solution = self._calculate_wavelength_solution()
 
     def _get_slit_half_width(self):
         slit_width = (self._master_arc.header['slit_width']
@@ -139,7 +140,7 @@ class _WavelengthSolution:
         orders = np.arange(order0, order0 - self._1d_arc_spectra.shape[0], -1)
         return orders, spectral_offset
 
-    def _calculate_wavelength_solution(self):
+    def _calculate_wavelength_solution(self) -> dict:
         template = self._get_closest_solution_templates()[0]
         template_x, template_y = np.meshgrid(self._pixels,
                                              template['orders'])
@@ -159,38 +160,81 @@ class _WavelengthSolution:
 
         fit_centers = np.round(p(xc, yc), 4)
         fit_edges = np.round(p(xe, ye), 4)
-        return fit_centers, fit_edges
+
+        # use solution as starting points and refit for known line locations
+        new_fit_centers = np.zeros_like(fit_centers)
+        new_fit_edges = np.zeros_like(fit_edges)
+        used_pixels = []
+        used_wavelengths = []
+        known_lines = np.genfromtxt(
+            Path(package_directory, 'anc', 'ThAr_line_list.dat'),
+            skip_header=True)
+        peak_model = GaussianModel()
+        solution_model = PolynomialModel(degree=3)
+        for i in range(fit_centers.shape[0]):
+            fit_order = fit_centers[i]
+            arc_order = self._1d_arc_spectra[i]
+            lines_in_order = known_lines[
+                np.where((known_lines >= np.min(fit_order))
+                         & (known_lines <= np.max(fit_order)))]
+            new_centers = []
+            new_lines = []
+            for line in lines_in_order:
+                ind = np.abs(fit_order - line).argmin()
+                if (ind < 16) or (ind > fit_order.shape[0] - 16):
+                    continue
+                else:
+                    y = arc_order[ind-12:ind+12+1]
+                    x = np.arange(-12, 12+1, 1)
+                    params = peak_model.guess(y, x=x)
+                    fit = peak_model.fit(y, params, x=x)
+                    fit_center = fit.params['center'].value
+                    if np.abs(fit_center) < 12:
+                        new_lines.append(line)
+                        new_centers.append(ind + fit_center)
+            params = solution_model.guess(new_lines, x=new_centers)
+            fit = solution_model.fit(new_lines, params, x=new_centers)
+            new_fit_centers[i] = fit.eval(x=self._pixels)
+            new_fit_edges[i] = fit.eval(x=self._pixel_edges)
+            used_pixels.append(new_centers)
+            used_wavelengths.append(new_lines)
+        return {'fit_centers': new_fit_centers,
+                'fit_edges': new_fit_edges,
+                'used_pixels': used_pixels,
+                'used_wavelengths': used_wavelengths}
 
     # noinspection DuplicatedCode
     def quality_assurance(self, file_path: Path):
-        fig, axis = plt.subplots(figsize=(8, 6), constrained_layout=True)
-        axis.set_xticks([])
-        axis.set_yticks([])
-        axis.set_frame_on(False)
-        cmap = plt.get_cmap('bone').copy()
-        axis.pcolormesh(self._master_flat.data, cmap=cmap, alpha=0.5)
-        lb = self._order_bounds.lower_bounds
-        ub = self._order_bounds.upper_bounds
-        for i in range(len(self._order_numbers)):
-            x = 2047
-            y = lb[i][x] + (ub[i][x] - lb[i][x]) / 2
-            axis.text(x, y, self._order_numbers[i], ha='center',
-                      va='center_baseline', fontsize=6, color='red')
-            x = 16
-            y = lb[i][x] + (ub[i][x] - lb[i][x]) / 2
-            wl = f'{self._wavelength_solution_centers[i][0]:.4f} nm'
-            axis.text(x, y, wl, ha='left', va='center_baseline', fontsize=6,
-                      color='blue')
-            x = 4096-16
-            y = lb[i][x] + (ub[i][x] - lb[i][x]) / 2
-            wl = f'{self._wavelength_solution_centers[i][-1]:.4f} nm'
-            axis.text(x, y, wl, ha='right', va='center_baseline', fontsize=6,
-                      color='blue')
-        savepath = Path(file_path, 'quality_assurance',
-                        'order_numbers_and_wavelength_bounds.jpg')
-        make_directory(savepath.parent)
-        plt.savefig(savepath, dpi=600)
-        plt.close(fig)
+        with plt.style.context(rcparams):
+            for i in range(len(self._order_numbers)):
+                fig, axes = plt.subplots(2, 1, figsize=(4, 3),
+                                         sharex='all', constrained_layout=True,
+                                         gridspec_kw={'height_ratios': [1, 4]})
+                axes[0].plot(self._pixels + 0.5, self._1d_arc_spectra[i],
+                             color='k', linewidth=0.5)
+                axes[1].scatter(
+                    self._wavelength_solution['used_pixels'][i],
+                    self._wavelength_solution['used_wavelengths'][i],
+                    color='grey', s=4)
+                axes[1].plot(self._pixels + 0.5,
+                             self._wavelength_solution['fit_centers'][i],
+                             color='red', linewidth=0.5)
+
+                axes[0].set_title('Observed Arc Spectrum')
+                axes[0].set_yticks([])
+                axes[1].set_title('5th-Degree Polynomial Fit')
+                axes[1].set_xlabel('Detector Pixel')
+                axes[1].xaxis.set_major_locator(ticker.MultipleLocator(512))
+                axes[1].set_xlim(0, self._pixels.shape[0])
+                axes[1].set_ylabel('Wavelength [nm]')
+                axes[1].yaxis.set_major_locator(
+                    ticker.MaxNLocator(integer=True))
+                savepath = Path(file_path, 'quality_assurance',
+                                'wavelength_solutions',
+                                f'order{self._order_numbers[i]}.jpg')
+                make_directory(savepath.parent)
+                plt.savefig(savepath, dpi=600)
+                plt.close(fig)
 
     @property
     def order_numbers(self) -> np.ndarray:
@@ -198,8 +242,8 @@ class _WavelengthSolution:
 
     @property
     def centers(self) -> np.ndarray:
-        return self._wavelength_solution_centers
+        return self._wavelength_solution['fit_centers']
 
     @property
     def edges(self) -> np.ndarray:
-        return self._wavelength_solution_edges
+        return self._wavelength_solution['fit_edges']

@@ -36,6 +36,15 @@ def bias_cmap():
     return cmap
 
 
+def arc_cmap():
+    """
+    Colormap "inferno" for displaying bias data.
+    """
+    cmap = plt.get_cmap('inferno').copy()
+    cmap.set_bad((0.75, 0.75, 0.75))
+    return cmap
+
+
 def flux_cmap():
     """
     Colormap "viridis" for displaying flux data.
