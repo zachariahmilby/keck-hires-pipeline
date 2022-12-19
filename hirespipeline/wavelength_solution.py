@@ -184,12 +184,13 @@ class _WavelengthSolution:
                 if (ind < 16) or (ind > fit_order.shape[0] - 16):
                     continue
                 else:
-                    y = arc_order[ind-12:ind+12+1]
-                    x = np.arange(-12, 12+1, 1)
+                    y = arc_order[ind-16:ind+16+1]
+                    x = np.arange(-16, 16+1, 1)
                     params = peak_model.guess(y, x=x)
                     fit = peak_model.fit(y, params, x=x)
                     fit_center = fit.params['center'].value
-                    if np.abs(fit_center) < 12:
+                    fit_amplitude = fit.params['amplitude'].value
+                    if (np.abs(fit_center) < 12) and (fit_amplitude > 0.2):
                         new_lines.append(line)
                         new_centers.append(ind + fit_center)
             params = solution_model.guess(new_lines, x=new_centers)
@@ -209,7 +210,7 @@ class _WavelengthSolution:
             for i in range(len(self._order_numbers)):
                 fig, axes = plt.subplots(2, 1, figsize=(4, 3),
                                          sharex='all', constrained_layout=True,
-                                         gridspec_kw={'height_ratios': [1, 4]})
+                                         gridspec_kw={'height_ratios': [1, 3]})
                 axes[0].plot(self._pixels + 0.5, self._1d_arc_spectra[i],
                              color='k', linewidth=0.5)
                 axes[1].scatter(
@@ -229,6 +230,7 @@ class _WavelengthSolution:
                 axes[1].set_ylabel('Wavelength [nm]')
                 axes[1].yaxis.set_major_locator(
                     ticker.MaxNLocator(integer=True))
+
                 savepath = Path(file_path, 'quality_assurance',
                                 'wavelength_solutions',
                                 f'order{self._order_numbers[i]}.jpg')

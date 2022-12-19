@@ -250,3 +250,15 @@ class HIRESPipeline:
 
         print(f'Processing complete, time elapsed '
               f'{datetime.now(timezone.utc) - t0}.')
+
+
+if __name__ == "__main__":
+    target = ['Jupiter', 'Ganymede', 'Europa']
+    file_directory = '/Users/zachariahmilby/Documents/School/' \
+                     'Planetary Sciences PhD/Projects/' \
+                     'Galilean Satellite Aurora (Katherine de Kleer)/HIRES/' \
+                     'Data/Ganymede 2021-06-08/selected'
+    science_subdirectory = ['flux_calibration', 'science', 'guide_satellite']
+    pipeline = HIRESPipeline(target=target, file_directory=file_directory,
+                             science_subdirectory=science_subdirectory)
+    pipeline.run()
