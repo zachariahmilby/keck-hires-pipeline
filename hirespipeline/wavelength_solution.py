@@ -12,10 +12,10 @@ from lmfit.models import GaussianModel, PolynomialModel
 from scipy.signal import correlate
 from sklearn.preprocessing import minmax_scale
 
-from hirespipeline.general import package_directory
-from hirespipeline.order_tracing import _OrderBounds
 from hirespipeline.files import make_directory
+from hirespipeline.general import package_directory
 from hirespipeline.graphics import rcparams
+from hirespipeline.order_tracing import _OrderBounds
 
 
 class _WavelengthSolution:

@@ -127,7 +127,21 @@ The `target` keyword can be either a string or a list of strings if you want
 to process multiple directories. For each target, you'll have to specify a 
 directory under the `science_subdirectory` keyword, which should also be either
 a string or a list of strings. The `file_directory` keyword points to the 
-`selected` directory as defined above. 
+`selected` directory as defined above.
+
+> **CAUTION**<br>
+> The pipeline assumes you are using files downloaded from the Keck Observatory
+> Archive with unique filenames, e.g., "HI.20210608.49901.fits.gz". If you are
+> using data with non-unique filenames, e.g., "hires00001.fits", you will have 
+> to supply several additional keyword arguments when you instantiate the 
+> `HIRESPipeline` class, because they are added to the FITS headers when they
+> are processed by the archive. They include:
+> 1. `slit_length`: the length of the slit you chose in arcseconds,
+> 2. `slit_width`: the width of the slit you chose in arcseconds,
+> 3. `spatial_binning`: the spatial binning you chose (probably 2 or 3),
+> 4. `spectral_binning`: the spectral binning you chose (almost certainly 1), 
+>     and
+> 5. `gain`: the detector gains, either "low" (the HIRES default) or "high".
 
 Running the pipeline with the `.run()` method will save the reduced science 
 data in a `reduced` directory on the same level as `selected`. It also includes 

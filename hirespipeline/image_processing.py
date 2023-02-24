@@ -10,14 +10,17 @@ from astropy.nddata import CCDData, StdDevUncertainty
 from astropy.time import Time
 
 from hirespipeline.airmass_extinction import _extinction_correct
-from hirespipeline.general import readnoise
+from hirespipeline.general import readnoise, low_gain, high_gain
 from hirespipeline.graphics import _parse_mosaic_detector_slice, \
     _get_full_image_size, _get_mosaic_detector_corner_coordinates
 from hirespipeline.order_tracing import _OrderBounds
 from hirespipeline.wavelength_solution import _WavelengthSolution
 
 
-def _get_header(file_path: Path) -> dict:
+def _get_header(file_path: Path, slit_length: float | None,
+                slit_width: float | None,
+                spatial_binning: float | None,
+                spectral_binning: float | None) -> dict:
     """
     Retrieve ancillary metadata from the headers.
     """
@@ -25,28 +28,77 @@ def _get_header(file_path: Path) -> dict:
         header = hdul[0].header
         binning = np.array(header['BINNING'].split(',')).astype(int)
         datetime = Time(header['DATE_BEG'], format='isot', scale='utc').fits
+        try:
+            if slit_length is None:
+                slit_length = header['SLITLEN']
+        except KeyError:
+            raise Exception("If using files with non-unique filenames, e.g., "
+                            "hires00001.fits, you must specify the slit "
+                            "length (in arcseconds) when instantiating the "
+                            "HIRESPipeline class.")
+        try:
+            if slit_width is None:
+                slit_width = header['SLITWIDT']
+        except KeyError:
+            raise Exception("If using files with non-unique filenames, e.g., "
+                            "hires00001.fits, you must specify the slit "
+                            "width (in arcseconds) when instantiating the "
+                            "HIRESPipeline class.")
+        try:
+            if spatial_binning is None:
+                spatial_scale = header['SPATSCAL']
+            else:
+                spatial_scale = 0.119 * spatial_binning
+        except KeyError:
+            raise Exception("If using files with non-unique filenames, e.g., "
+                            "hires00001.fits, you must specify spatial "
+                            "binning when instantiating the HIRESPipeline "
+                            "class.")
+        try:
+            if spectral_binning is None:
+                spectral_scale = header['DISPSCAL']
+            else:
+                spectral_scale = 0.179 * spectral_binning
+        except KeyError:
+            raise Exception("If using files with non-unique filenames, e.g., "
+                            "hires00001.fits, you must specify spectral "
+                            "binning when instantiating the HIRESPipeline "
+                            "class.")
         return {
             'file_name': file_path.name,
             'datetime': datetime,
             'observers': header['OBSERVER'],
             'exposure_time': header['EXPTIME'],
             'airmass': float(header['AIRMASS']),
-            'slit_length': header['SLITLEN'],
-            'slit_length_bins': np.ceil(header['SLITLEN']/header['SPATSCAL']),
-            'slit_width': header['SLITWIDT'],
-            'slit_width_bins': np.ceil(header['SLITWIDT']/header['DISPSCAL']),
+            'slit_length': slit_length,
+            'slit_length_bins': np.ceil(slit_length/spatial_scale),
+            'slit_width': slit_width,
+            'slit_width_bins': np.ceil(slit_width/spectral_scale),
             'cross_disperser': header['XDISPERS'].lower(),
             'cross_disperser_angle': np.round(header['XDANGL'], 5),
             'echelle_angle': np.round(header['ECHANGL'], 5),
             'spatial_binning': int(binning[0]),
-            'spatial_bin_scale': header['SPATSCAL'],
+            'spatial_bin_scale': spatial_scale,
             'spectral_binning': int(binning[1]),
-            'spectral_bin_scale': header['DISPSCAL'],
+            'spectral_bin_scale': spectral_scale,
             'pixel_size': 15,
         }
 
 
-def _combine_mosaic_image(file_path: Path) -> u.Quantity:
+def _determine_gains(gain: str):
+    if gain == 'low':
+        gains = low_gain
+    elif gain == 'high':
+        gains = high_gain
+    else:
+        raise Exception('Gain must be supplied as a string. Choices are '
+                        '"high" or "low". The HIRES default setting is '
+                        '"low".')
+    return gains
+
+
+def _combine_mosaic_image(file_path: Path,
+                          gain: str or None) -> u.Quantity:
     """
     Combine mosaic image data into a single array with proper inter-detector
     spacing, and multiply each detector image by its corresponding gain so they
@@ -57,9 +109,20 @@ def _combine_mosaic_image(file_path: Path) -> u.Quantity:
                              fill_value=np.nan)
         header = hdul[0].header
         binning = np.array(header['BINNING'].split(',')).astype(int)
+        if gain is None:
+            try:
+                gains = [header[f'CCDGN0{detector_number}']
+                         for detector_number in range(1, 4)]
+            except KeyError:
+                raise Exception("If using files with non-unique filenames, "
+                                "e.g., hires00001.fits, you must specify the "
+                                "detector gain as a string ('high' or 'low') "
+                                "when instantiating the HIRESPipeline class.")
+        else:
+            gains = _determine_gains(gain)
         for detector_number in range(1, 4):
             image_header = hdul[detector_number].header
-            gain = header[f'CCDGN0{detector_number}']
+            gain = gains[detector_number - 1]
             detector_slice = _parse_mosaic_detector_slice(
                 image_header['DATASEC'])
             detector_image = np.flipud(
@@ -73,15 +136,20 @@ def _combine_mosaic_image(file_path: Path) -> u.Quantity:
 
 
 def _get_images_from_directory(
-        directory: Path, remove_cosmic_rays: bool = False) -> list[CCDData]:
+        directory: Path, slit_length: float, slit_width: float,
+        spatial_binning: float, spectral_binning: float,
+        gain: str, remove_cosmic_rays: bool = False) -> list[CCDData]:
     """
     Make a list of CCDData objects of combined mosaic data.
     """
     files = sorted(directory.glob('*.fits*'))
     images = []
     for file in files:
-        header = _get_header(file)
-        data = CCDData(_combine_mosaic_image(file), header=header)
+        header = _get_header(file, slit_length=slit_length,
+                             slit_width=slit_width,
+                             spatial_binning=spatial_binning,
+                             spectral_binning=spectral_binning)
+        data = CCDData(_combine_mosaic_image(file, gain=gain), header=header)
         if remove_cosmic_rays:
             data = ccdproc.cosmicray_lacosmic(data)
         data.data[np.where(data.data == 0)] = np.nan  # saturated pixels to NaN
@@ -149,33 +217,57 @@ def _make_median_flux(flux_images: list[CCDData]) -> CCDData:
     return median_ccd
 
 
-def _make_master_bias(file_directory: Path) -> CCDData:
+def _make_master_bias(file_directory: Path,
+                      slit_length: float, slit_width: float,
+                      spatial_binning: float, spectral_binning: float,
+                      gain: str) -> CCDData:
     """
     Wrapper function to make a master bias detector image.
     """
-    bias_images = _get_images_from_directory(Path(file_directory, 'bias'))
+    bias_images = _get_images_from_directory(Path(file_directory, 'bias'),
+                                             slit_length=slit_length,
+                                             slit_width=slit_width,
+                                             spatial_binning=spatial_binning,
+                                             spectral_binning=spectral_binning,
+                                             gain=gain)
     master_bias = _make_median_bias(bias_images)
     return master_bias
 
 
 def _make_master_flux(file_directory: Path, flux_type: str,
-                      master_bias: CCDData) -> CCDData:
+                      master_bias: CCDData,
+                      slit_length: float, slit_width: float,
+                      spatial_binning: float, spectral_binning: float,
+                      gain: str) -> CCDData:
     """
     Wrapper function to make a master flat or arc detector image.
     """
-    flux_images = _get_images_from_directory(Path(file_directory, flux_type))
+    flux_images = _get_images_from_directory(Path(file_directory, flux_type),
+                                             slit_length=slit_length,
+                                             slit_width=slit_width,
+                                             spatial_binning=spatial_binning,
+                                             spectral_binning=spectral_binning,
+                                             gain=gain)
     flux_images = [ccdproc.subtract_bias(image, master=master_bias)
                    for image in flux_images]
     master_flux = _make_median_flux(flux_images)
     return master_flux
 
 
-def _make_master_trace(file_directory: Path, master_bias: CCDData) -> CCDData:
+def _make_master_trace(file_directory: Path, master_bias: CCDData,
+                       slit_length: float, slit_width: float,
+                       spatial_binning: float, spectral_binning: float,
+                       gain: str) -> CCDData:
     """
     Wrapper function to load the first trace file and make a master order trace
     image.
     """
-    trace_image = _get_images_from_directory(Path(file_directory, 'trace'))[0]
+    trace_image = _get_images_from_directory(Path(file_directory, 'trace'),
+                                             slit_length=slit_length,
+                                             slit_width=slit_width,
+                                             spatial_binning=spatial_binning,
+                                             spectral_binning=spectral_binning,
+                                             gain=gain)[0]
     master_trace = ccdproc.subtract_bias(trace_image, master=master_bias)
     return master_trace
 
@@ -184,14 +276,20 @@ def _process_science_data(
         file_directory: Path, sub_directory: str,
         master_bias: CCDData, master_flat: CCDData,
         order_bounds: _OrderBounds,
-        wavelength_solution: _WavelengthSolution) -> ([CCDData], [str]):
+        wavelength_solution: _WavelengthSolution,
+        slit_length: float, slit_width: float,
+        spatial_binning: float, spectral_binning: float,
+        gain: str) -> ([CCDData], [str]):
     """
     Wrapper function to apply all of the reduction steps to science data in a
     supplied directory.
     """
     print(f'      Loading data and removing cosmic rays...')
     science_images = _get_images_from_directory(
-        Path(file_directory, sub_directory), remove_cosmic_rays=True)
+        Path(file_directory, sub_directory),
+        slit_length=slit_length, slit_width=slit_width,
+        spatial_binning=spatial_binning, spectral_binning=spectral_binning,
+        gain=gain, remove_cosmic_rays=True)
     count = len(science_images)
     reduced_science_images = []
     filenames = []

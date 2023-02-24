@@ -1,13 +1,13 @@
+import warnings
 from pathlib import Path
 
 import matplotlib.colors as colors
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import numpy as np
+import pandas as pd
 from astropy.io import fits
 from astropy.time import Time
-import pandas as pd
-import warnings
 
 from hirespipeline.graphics import flux_cmap, _parse_mosaic_detector_slice, \
     rcparams
@@ -184,7 +184,3 @@ def create_quicklooks(directory: str):
     """
 
     _FilesQuicklook(directory).run()
-
-
-if __name__ == "__main__":
-    create_quicklooks('/Users/zachariahmilby/Desktop/pre-pipeline')

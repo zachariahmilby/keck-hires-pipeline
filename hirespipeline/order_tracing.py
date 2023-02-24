@@ -7,6 +7,7 @@ from astropy.nddata import CCDData, StdDevUncertainty
 from lmfit.models import GaussianModel, PolynomialModel
 from scipy.signal import find_peaks
 from sklearn.preprocessing import minmax_scale
+
 from hirespipeline.files import make_directory
 
 
