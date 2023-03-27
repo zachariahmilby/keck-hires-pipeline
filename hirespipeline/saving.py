@@ -120,3 +120,4 @@ def _save_as_fits(data_header: dict, data: np.ndarray, uncertainty: np.ndarray,
 
         make_directory(savepath.parent)
         hdul.writeto(savepath, overwrite=True)
+        hdul.close()
