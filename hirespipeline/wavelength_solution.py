@@ -213,7 +213,8 @@ class _WavelengthSolution:
             for i in range(len(self._order_numbers)):
                 fig, axes = plt.subplots(2, 1, figsize=(4, 3),
                                          sharex='all', constrained_layout=True,
-                                         gridspec_kw={'height_ratios': [1, 4]})
+                                         gridspec_kw={'height_ratios': [1, 4]},
+                                         clear=True)
                 axes[0].plot(self._pixels + 0.5, self._1d_arc_spectra[i],
                              color='k', linewidth=0.5)
                 axes[1].scatter(

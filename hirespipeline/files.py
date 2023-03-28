@@ -100,7 +100,7 @@ class _FilesQuicklook:
             fig, axes = plt.subplots(
                 4, 1, figsize=(6, 6),
                 gridspec_kw={'height_ratios': [1, 2, 2, 2]},
-                constrained_layout=True)
+                constrained_layout=True, clear=True)
             [axis.set_xticks([]) for axis in axes.ravel()]
             [axis.set_yticks([]) for axis in axes.ravel()]
             [axis.set_frame_on(False) for axis in axes.ravel()]

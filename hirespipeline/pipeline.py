@@ -32,7 +32,7 @@ def _calibration_qa_graphic(rectified_data: CCDData,
     with plt.style.context(rcparams):
         fig, axes = plt.subplots(1, 2, figsize=(8, 4),
                                  constrained_layout=True, sharex='all',
-                                 sharey='all')
+                                 sharey='all', clear=True)
         [turn_off_axes(axis) for axis in axes.ravel()]
         img0 = axes[0].pcolormesh(stack_orders(rectified_data.data),
                                   cmap=cmap,
@@ -57,7 +57,7 @@ def _science_qa_graphic(rectified_data: CCDData,
     with plt.style.context(rcparams):
         fig, axes = plt.subplots(1, 3, figsize=(12, 4),
                                  constrained_layout=True, sharex='all',
-                                 sharey='all')
+                                 sharey='all', clear=True)
         [turn_off_axes(axis) for axis in axes.ravel()]
         data = stack_orders(rectified_data.data)
         unc = stack_orders(rectified_data.uncertainty.array)

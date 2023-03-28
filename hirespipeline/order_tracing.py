@@ -145,7 +145,8 @@ class _OrderTraces:
 
     # noinspection DuplicatedCode
     def quality_assurance(self, file_path: Path):
-        fig, axis = plt.subplots(figsize=(8, 6), constrained_layout=True)
+        fig, axis = plt.subplots(figsize=(8, 6), constrained_layout=True,
+                                 clear=True)
         axis.set_xticks([])
         axis.set_yticks([])
         axis.set_frame_on(False)
@@ -241,7 +242,8 @@ class _OrderBounds:
 
     # noinspection DuplicatedCode
     def quality_assurance(self, file_path: Path):
-        fig, axis = plt.subplots(figsize=(8, 6), constrained_layout=True)
+        fig, axis = plt.subplots(figsize=(8, 6), constrained_layout=True,
+                                 clear=True)
         axis.set_xticks([])
         axis.set_yticks([])
         axis.set_frame_on(False)
