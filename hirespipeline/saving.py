@@ -85,6 +85,8 @@ def _save_as_fits(data_header: dict, data: np.ndarray, uncertainty: np.ndarray,
                        'spectral bin scale [arcsec/bin]'))
         header.append(('PIXWIDTH', data_header['pixel_size'],
                        'pixel width [micron]'))
+        header.append(('SKYPA', data_header['sky_position_angle'],
+                       'slit rotation angle [deg]'))
 
         # data uncertainty
         primary_unc_hdu = fits.ImageHDU(uncertainty, name='PRIMARY_UNC')

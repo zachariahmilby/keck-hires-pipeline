@@ -82,6 +82,7 @@ def _get_header(file_path: Path, slit_length: float | None,
             'spectral_binning': int(binning[1]),
             'spectral_bin_scale': spectral_scale,
             'pixel_size': 15,
+            'sky_position_angle': header['SKYPA'],
         }
 
 
