@@ -169,13 +169,13 @@ class _FilesQuicklook:
         df.to_csv(savepath, index=False)
 
 
-def create_quicklooks(directory: str):
+def create_quicklooks(directory: str or Path):
     """
     Wrapper function to create quicklooks in a directory containing FITS files.
 
     Parameters
     ----------
-    directory : str
+    directory : str or Path
         The path to the directory.
 
     Returns
