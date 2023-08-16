@@ -71,6 +71,12 @@ def _get_header(file_path: Path, slit_length: float | None,
                             "hires00001.fits, you must specify spectral "
                             "binning when instantiating the HIRESPipeline "
                             "class.")
+
+        try:
+            skypa = header['SKYPA']
+        except KeyError:
+            skypa = 'unknown'
+
         return {
             'file_name': file_path.name,
             'datetime': datetime,
@@ -90,7 +96,7 @@ def _get_header(file_path: Path, slit_length: float | None,
             'spectral_binning': int(binning[1]),
             'spectral_bin_scale': spectral_scale,
             'pixel_size': 15,
-            'sky_position_angle': header['SKYPA'],
+            'sky_position_angle': skypa,
         }
 
 
