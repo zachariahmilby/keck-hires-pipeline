@@ -67,21 +67,6 @@ def _parse_mosaic_detector_slice(slice_string: str) -> tuple[slice, slice]:
                                                    1)
 
 
-def _get_full_image_size(hdul: fits.HDUList) -> (int, int):
-    """
-    Calculate the dimensions of a full image containing all three detectors
-    with proper inter-detector spacing.
-    """
-    binning = np.array(hdul[0].header['BINNING'].split(',')).astype(int)
-    detector_slice = _parse_mosaic_detector_slice(
-        hdul[1].header['DATASEC'])
-    detector_image = np.flipud(hdul[1].data.T[detector_slice])
-    n_rows, n_cols = detector_image.shape
-    top_corner = _get_mosaic_detector_corner_coordinates(
-                        hdul[3].header, binning)[0]
-    return top_corner + n_rows, n_cols
-
-
 def _get_mosaic_detector_corner_coordinates(
         image_header: fits.header.Header,
         binning: np.ndarray) -> np.ndarray:
@@ -95,3 +80,18 @@ def _get_mosaic_detector_corner_coordinates(
         np.abs(np.ceil(2048 - n_rows - 1) / binning[0]).astype(int)
     spectral_coordinate = np.ceil(n_columns - 1).astype(int)
     return np.array([spatial_coordinate, spectral_coordinate])
+
+
+def _get_full_image_size(hdul: fits.HDUList) -> (int, int):
+    """
+    Calculate the dimensions of a full image containing all three detectors
+    with proper inter-detector spacing.
+    """
+    binning = np.array(hdul[0].header['BINNING'].split(',')).astype(int)
+    detector_slice = _parse_mosaic_detector_slice(
+        hdul[1].header['DATASEC'])
+    detector_image = np.flipud(hdul[1].data.T[detector_slice])
+    n_rows, n_cols = detector_image.shape
+    top_corner = _get_mosaic_detector_corner_coordinates(
+                        hdul[3].header, binning)[0]
+    return top_corner + n_rows, n_cols

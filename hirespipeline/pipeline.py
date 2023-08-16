@@ -134,6 +134,7 @@ class HIRESPipeline:
             Path(Path(file_directory).parent, 'reduced'))
         self._science_subdirectory = self._determine_input_type(
             science_subdirectory)
+        self._check_inputs()
         try:
             self._slit_length = float(slit_length)
             self._slit_width = float(slit_width)
@@ -163,6 +164,12 @@ class HIRESPipeline:
             raise Exception('Improper science subdirectory input type. Must be'
                             ' a string or a list of strings.')
 
+    def _check_inputs(self):
+        if len(self._target) != len(self._science_subdirectory):
+            raise Exception(f"Targets must match length of subdirectories. "
+                            f"You've specified {self._target} for targets but "
+                            f"{self._science_subdirectory} as subdirectories.")
+
     @staticmethod
     def _save_master_calibration_file(
             ccd_data: CCDData, order_numbers: np.ndarray, data_type: str,
@@ -189,6 +196,7 @@ class HIRESPipeline:
     def _reduced_filename(original_filename: str):
         return original_filename.replace('.fits', '_reduced.fits')
 
+    # noinspection DuplicatedCode
     def run(self):
         t0 = datetime.now(timezone.utc)
         print(f'Running HIRES data reduction pipeline on '

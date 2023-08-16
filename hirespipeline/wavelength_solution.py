@@ -42,15 +42,19 @@ class _WavelengthSolution:
     def _make_1d_spectra(self):
         """
         Make spatial averages of each spectrum to collapse them to one
-        dimension. Also normalize them.
+        dimension. Also normalize them. To account for overlapping orders, I am
+        only selecting the middle 4 rows of data.
         """
         spectra = np.full(self._order_bounds.lower_bounds.shape,
                           fill_value=np.nan)
         rectified_arcs = self._order_bounds.rectify(self._master_arc).data
+        bottom = int(rectified_arcs.shape[1] / 2 - 2)
+        top = int(rectified_arcs.shape[1] / 2 + 2) + 1
+        select = np.s_[bottom:top]
         for i, spectrum in enumerate(rectified_arcs):
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                spectra[i] = minmax_scale(np.nanmean(spectrum, axis=0))
+                spectra[i] = minmax_scale(np.nanmean(spectrum[select], axis=0))
         spectra[np.isnan(spectra)] = 0
         return spectra
 

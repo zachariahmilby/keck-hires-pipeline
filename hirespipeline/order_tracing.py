@@ -20,16 +20,18 @@ class _OrderTraces:
         self._master_trace = minmax_scale(master_trace.data)
         self._n_rows, self._n_cols = self._master_trace.data.shape
         self._selected_pixels = np.arange(0, self._n_cols, 128, dtype=int)
+        self._starting_points = self._get_starting_points()
         self._pixels = np.arange(self._n_cols)
-        self._traces = self._find_complete_traces()
+        self._traces = self._select_traces()
 
     def _fit_gaussian(self, center, col):
         center = int(center)
-        y = self._master_trace[center-15:center+15, col]
-        x = np.arange(center-15, center+15)
+        y = self._master_trace[center-15:center+16, col]
+        x = np.arange(center-15, center+16)
+        good = np.where(~np.isnan(y))[0]
         model = GaussianModel()
-        params = model.guess(y, x=x)
-        result = model.fit(y, params, x=x)
+        params = model.guess(y[good], x=x[good])
+        result = model.fit(y[good], params, x=x[good])
         center = result.params['center'].value
         return center
 
@@ -38,110 +40,74 @@ class _OrderTraces:
         model = PolynomialModel(degree=degree)
         ind = np.isfinite(y)
         params = model.guess(y[ind], x=x[ind])
-        result = model.fit(y, params, x=x, nan_policy='omit')
+        result = model.fit(y[ind], params, x=x[ind])
         return result
 
-    def _find_initial_trace(self) -> (np.ndarray, int, bool):
+    def _get_starting_points(self) -> np.ndarray:
+        """
+        Find peaks from trace image, fit a polynomial to their separation, then
+        extrapolate for the full vertical pixel range of the composite image.
+        """
+        vslice = self._master_trace[:, 0]
+        peaks, _ = find_peaks(vslice, height=0.2)
+        index = np.arange(len(peaks))
+        fit = self._fit_polynomial(peaks, index, 3)
+        extrapolated_peaks = fit.eval(x=np.arange(-10, len(peaks)+11))
+        ind = np.where((extrapolated_peaks > 0) &
+                       (extrapolated_peaks < self._n_rows))[0]
+        return extrapolated_peaks[ind]
+
+    def _find_initial_traces(self) -> (np.ndarray, int, bool):
         """
         Calculate an initial trace using the third identified peak (should be
         far enough for the whole trace to fall on the detector without any odd
         effects. Also returns the initial spacing between this trace and its
         adjacent traces.
         """
-        vslice = self._master_trace[:, 0]
-        peaks, _ = find_peaks(vslice, height=0.2)
-        use_peak = 0
-        center = peaks[use_peak]
-        dy = peaks[use_peak+1] - peaks[use_peak]
-        trace = np.full_like(self._selected_pixels, fill_value=np.nan,
-                             dtype=float)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            for i, col in enumerate(self._selected_pixels):
-                trace[i] = self._fit_gaussian(center, col)
-                center = int(trace[i])
-        fit = self._fit_polynomial(trace, self._selected_pixels, 2).best_fit
-        return fit, dy, True
-
-    def _check_for_completeness(self, vertical_positions):
-        """
-        Make sure there are no NaNs in the data to which you're fitting the
-        Gaussian model.
-        """
-        nans = False
-        for i, j in zip(self._selected_pixels, vertical_positions):
-            count = len(
-                np.where(np.isnan(self._master_trace[j-15:j+15, i]))[0])
-            if count != 0:
-                nans = True
-        return nans
-
-    def _find_next_trace(self, initial_trace: np.ndarray, dy) \
-            -> (np.ndarray, np.ndarray, int, bool):
-        """
-        Find the next trace above a given starting trace. Returns an array of
-        NaNs if the `_check_for_completeness` function returns False, meaning
-        it skips traces if a part of them falls off of the detector.
-        """
-        starting_indices = (initial_trace + dy).astype(int)
-        trace = np.full_like(self._selected_pixels, fill_value=np.nan,
-                             dtype=float)
-        nans = self._check_for_completeness(starting_indices)
-        if not nans:
-            starting_coordinates = zip(starting_indices, self._selected_pixels)
+        traces = np.full((self._starting_points.shape[0],
+                          self._n_cols), fill_value=np.nan)
+        for i, starting_point in enumerate(self._starting_points):
+            trace = np.full(self._selected_pixels.shape[0], fill_value=np.nan)
+            center = starting_point
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                for i, (center, col) in enumerate(starting_coordinates):
-                    trace[i] = self._fit_gaussian(center, col)
-            fit = self._fit_polynomial(
-                trace, self._selected_pixels, 3).best_fit
-            dy = trace[0] - initial_trace[0]
-            if trace[-1] >= self._n_rows - dy:
-                check = False
-            else:
-                check = True
-            return fit, fit, dy, check
-        else:
-            return trace, starting_indices, dy*1.1, True
-
-    def _find_valid_traces(self):
-        """
-        Move up and down along the traces, fitting each subsequent trace.
-        """
-        found_traces = []
-        trace, dy, check = self._find_initial_trace()
-        found_traces.append(trace)
-        while check:
-            store_trace, trace, dy, check = self._find_next_trace(trace, dy)
-            found_traces.append(store_trace)
-        return np.array(found_traces)
+                try:
+                    for j, col in enumerate(self._selected_pixels):
+                        trace[j] = self._fit_gaussian(center, col)
+                        center = trace[j]
+                    fit = self._fit_polynomial(trace, self._selected_pixels, 3)
+                    rsquare = 1 - fit.residual.var() / np.var(trace)
+                    if rsquare > 0.9999:
+                        traces[i] = fit.eval(x=self._pixels)
+                except (IndexError, TypeError, ValueError):
+                    continue
+        return traces
 
     def _fill_in_missing_traces(self):
         """
         Fit to the known trace positions, filling in traces which cross between
         detectors and a couple of traces above and below the detector edges.
         """
-        found_traces = self._find_valid_traces()
-        n_rows, n_cols = found_traces.shape
+        initial_traces = self._find_initial_traces()
+        n_rows, n_cols = initial_traces.shape
         vind = np.arange(n_rows)
-        expanded_traces = np.zeros_like(found_traces)
+        expanded_traces = np.zeros_like(initial_traces)
         for i in range(n_cols):
-            vslice = found_traces[:, i]
+            vslice = initial_traces[:, i]
             fit = self._fit_polynomial(vslice, vind, 5)
             expanded_traces[:, i] = fit.eval(x=vind)
         return expanded_traces
 
-    def _find_complete_traces(self):
+    def _select_traces(self) -> np.ndarray:
         """
-        Calculate the pixel positions of every complete trace, including those
-        that go in between the detectors.
+        Keep only those traces which are fully within the mosaic.
         """
         expanded_traces = self._fill_in_missing_traces()
-        traces = np.zeros((expanded_traces.shape[0], self._n_cols))
-        for i, trace in enumerate(expanded_traces):
-            fit = self._fit_polynomial(trace, self._selected_pixels, 3)
-            traces[i] = fit.eval(x=self._pixels)
-        return traces
+        selected_traces = []
+        for trace in expanded_traces:
+            if (trace[0] > 0) & (trace[-1] < self._master_trace.shape[0] - 1):
+                selected_traces.append(trace)
+        return np.array(selected_traces)
 
     # noinspection DuplicatedCode
     def quality_assurance(self, file_path: Path):
@@ -217,21 +183,35 @@ class _OrderBounds:
         lower_bounds -= half_width + offset
         return upper_bounds, lower_bounds
 
+    @staticmethod
+    def _get_padded_data(ccd_data: CCDData,
+                         n: int = 100) -> (np.ndarray, np.ndarray):
+        """
+        Add some extra rows of NaNs so that the full slit width can be captured
+        near the detector edges.
+        """
+        data = ccd_data.data
+        unc = ccd_data.uncertainty.array
+        extra = np.full((n, data.shape[1]), fill_value=np.nan)
+        data = np.concatenate((extra, data, extra), axis=0)
+        unc = np.concatenate((extra, unc, extra), axis=0)
+        return data, unc, n
+
     def rectify(self, ccd_data: CCDData) -> CCDData:
         """
         Rectify a CCDData object using the calculated order bounds.
         """
         rectified_data = []
         rectified_uncertainty = []
-        for ub, lb in zip(self._upper_bounds, self.lower_bounds):
+        data, uncertainty, n = self._get_padded_data(ccd_data=ccd_data)
+        for ub, lb in zip(self._upper_bounds + n, self.lower_bounds + n):
             rectified_order_data = np.zeros(
                 (self._slit_length + 1, self._n_pixels))
             rectified_order_unc = np.zeros(
                 (self._slit_length + 1, self._n_pixels))
             for i in range(self._n_pixels):
-                rectified_order_data[:, i] = ccd_data.data[lb[i]:ub[i], i]
-                rectified_order_unc[:, i] = \
-                    ccd_data.uncertainty.array[lb[i]:ub[i], i]
+                rectified_order_data[:, i] = data[lb[i]:ub[i], i]
+                rectified_order_unc[:, i] = uncertainty[lb[i]:ub[i], i]
             rectified_data.append(rectified_order_data)
             rectified_uncertainty.append(rectified_order_unc)
         rectified_data = np.array(rectified_data)

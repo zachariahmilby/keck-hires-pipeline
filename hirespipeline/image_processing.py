@@ -10,11 +10,18 @@ from astropy.nddata import CCDData, StdDevUncertainty
 from astropy.time import Time
 
 from hirespipeline.airmass_extinction import _extinction_correct
-from hirespipeline.general import readnoise, low_gain, high_gain
-from hirespipeline.graphics import _parse_mosaic_detector_slice, \
-    _get_full_image_size, _get_mosaic_detector_corner_coordinates
+from hirespipeline.general import readnoise, low_gain, high_gain, \
+    detector_spacing_pixels
+from hirespipeline.graphics import _parse_mosaic_detector_slice
 from hirespipeline.order_tracing import _OrderBounds
 from hirespipeline.wavelength_solution import _WavelengthSolution
+
+
+def _parse_cross_disperser(cross_disperser: str):
+    if cross_disperser.lower() == 'red':
+        return 'red'
+    elif cross_disperser.lower() == 'uv':
+        return 'blue'
 
 
 def _get_header(file_path: Path, slit_length: float | None,
@@ -74,7 +81,8 @@ def _get_header(file_path: Path, slit_length: float | None,
             'slit_length_bins': np.ceil(slit_length/spatial_scale),
             'slit_width': slit_width,
             'slit_width_bins': np.ceil(slit_width/spectral_scale),
-            'cross_disperser': header['XDISPERS'].lower(),
+            'cross_disperser': _parse_cross_disperser(
+                header['XDISPERS'].lower()),
             'cross_disperser_angle': np.round(header['XDANGL'], 5),
             'echelle_angle': np.round(header['ECHANGL'], 5),
             'spatial_binning': int(binning[0]),
@@ -103,13 +111,16 @@ def _combine_mosaic_image(file_path: Path,
     """
     Combine mosaic image data into a single array with proper inter-detector
     spacing, and multiply each detector image by its corresponding gain so they
-    are comparable.
+    are comparable. Also block out the last 48 columns so they don't interfere
+    with retrievals later on.
     """
     with fits.open(file_path) as hdul:
-        data_image = np.full(_get_full_image_size(hdul),
-                             fill_value=np.nan)
         header = hdul[0].header
         binning = np.array(header['BINNING'].split(',')).astype(int)
+        spacing = np.round(detector_spacing_pixels / binning[0]).astype(int)
+        data_shape = np.ceil(2048/binning[0]).astype(int)
+        dims = np.array([data_shape * 3 + np.sum(spacing), 4096])
+        data_image = np.full(dims.astype(int), fill_value=np.nan)
         if gain is None:
             try:
                 gains = [header[f'CCDGN0{detector_number}']
@@ -129,10 +140,12 @@ def _combine_mosaic_image(file_path: Path,
             detector_image = np.flipud(
                 hdul[detector_number].data.T[detector_slice].astype(float))
             detector_image *= gain
-            corner = _get_mosaic_detector_corner_coordinates(
-                image_header, binning)
-            n_rows, _ = detector_image.shape
-            data_image[corner[0]:corner[0] + n_rows] = detector_image
+            extra = np.sum(spacing[:detector_number])
+            row0 = data_shape * (detector_number - 1) + extra
+            row1 = data_shape * detector_number + extra
+            s_ = np.s_[row0:row1, :]
+            data_image[s_] = detector_image
+    data_image[:, -48:] = np.nan
     return data_image * u.electron
 
 
