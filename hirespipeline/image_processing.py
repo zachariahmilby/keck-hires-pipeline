@@ -11,7 +11,7 @@ from astropy.time import Time
 
 from hirespipeline.airmass_extinction import _extinction_correct
 from hirespipeline.general import readnoise, low_gain, high_gain, \
-    detector_spacing_pixels
+    detector_vertical_gaps, bad_columns
 from hirespipeline.graphics import _parse_mosaic_detector_slice
 from hirespipeline.order_tracing import _OrderBounds
 from hirespipeline.wavelength_solution import _WavelengthSolution
@@ -24,6 +24,19 @@ def _parse_cross_disperser(cross_disperser: str):
         return 'blue'
 
 
+def determine_detector_layout(hdul: fits.HDUList) -> str:
+    """
+    If the HDUList has only one item, it's legacy data using the single
+    detector. If not, then it is the three-detector mosaic arrangement.
+    """
+    if len(hdul) == 1:
+        return 'legacy'
+    elif len(hdul) == 4:
+        return 'mosaic'
+    else:
+        raise Exception('Unknown detector layout!')
+
+
 def _get_header(file_path: Path, slit_length: float | None,
                 slit_width: float | None,
                 spatial_binning: float | None,
@@ -34,7 +47,15 @@ def _get_header(file_path: Path, slit_length: float | None,
     with fits.open(file_path) as hdul:
         header = hdul[0].header
         binning = np.array(header['BINNING'].split(',')).astype(int)
-        datetime = Time(header['DATE_BEG'], format='isot', scale='utc').fits
+        date_fmt = dict(format='isot', scale='utc')
+        if len(hdul) > 1:
+            datetime = Time(header['DATE_BEG'], **date_fmt).fits
+            detector_layout = 'mosaic'
+            pixel_size = 15
+        else:
+            datetime = Time(header['DATE'], **date_fmt)
+            detector_layout = 'legacy'
+            pixel_size = 24
         try:
             if slit_length is None:
                 slit_length = header['SLITLEN']
@@ -83,6 +104,7 @@ def _get_header(file_path: Path, slit_length: float | None,
             'observers': header['OBSERVER'],
             'exposure_time': header['EXPTIME'],
             'airmass': float(header['AIRMASS']),
+            'detector_layout': detector_layout,
             'slit_length': slit_length,
             'slit_length_bins': np.ceil(slit_length/spatial_scale),
             'slit_width': slit_width,
@@ -95,7 +117,7 @@ def _get_header(file_path: Path, slit_length: float | None,
             'spatial_bin_scale': spatial_scale,
             'spectral_binning': int(binning[1]),
             'spectral_bin_scale': spectral_scale,
-            'pixel_size': 15,
+            'pixel_size': pixel_size,
             'sky_position_angle': skypa,
         }
 
@@ -112,8 +134,7 @@ def _determine_gains(gain: str):
     return gains
 
 
-def _combine_mosaic_image(file_path: Path,
-                          gain: str or None) -> u.Quantity:
+def _get_image_data(file_path: Path, gain: str or None) -> u.Quantity:
     """
     Combine mosaic image data into a single array with proper inter-detector
     spacing, and multiply each detector image by its corresponding gain so they
@@ -123,35 +144,42 @@ def _combine_mosaic_image(file_path: Path,
     with fits.open(file_path) as hdul:
         header = hdul[0].header
         binning = np.array(header['BINNING'].split(',')).astype(int)
-        spacing = np.round(detector_spacing_pixels / binning[0]).astype(int)
-        data_shape = np.ceil(2048/binning[0]).astype(int)
-        dims = np.array([data_shape * 3 + np.sum(spacing), 4096])
-        data_image = np.full(dims.astype(int), fill_value=np.nan)
-        if gain is None:
-            try:
-                gains = [header[f'CCDGN0{detector_number}']
-                         for detector_number in range(1, 4)]
-            except KeyError:
-                raise Exception("If using files with non-unique filenames, "
-                                "e.g., hires00001.fits, you must specify the "
-                                "detector gain as a string ('high' or 'low') "
-                                "when instantiating the HIRESPipeline class.")
-        else:
-            gains = _determine_gains(gain)
-        for detector_number in range(1, 4):
-            image_header = hdul[detector_number].header
-            gain = gains[detector_number - 1]
-            detector_slice = _parse_mosaic_detector_slice(
-                image_header['DATASEC'])
-            detector_image = np.flipud(
-                hdul[detector_number].data.T[detector_slice].astype(float))
-            detector_image *= gain
-            extra = np.sum(spacing[:detector_number])
-            row0 = data_shape * (detector_number - 1) + extra
-            row1 = data_shape * detector_number + extra
-            s_ = np.s_[row0:row1, :]
-            data_image[s_] = detector_image
-    data_image[:, -48:] = np.nan
+        if len(hdul) > 1:  # post-2004 mosaic detectors
+            gap01 = np.full(
+                (int(detector_vertical_gaps[0] / binning[0]), 4096),
+                fill_value=0)
+            gap12 = np.full(
+                (int(detector_vertical_gaps[1] / binning[0]), 4096),
+                fill_value=0)
+            images = []
+            if gain is None:
+                try:
+                    gains = [header[f'CCDGN0{detector_number}']
+                             for detector_number in range(1, 4)]
+                except KeyError:
+                    raise Exception(
+                        "If using files with non-unique filenames, "
+                        "e.g., hires00001.fits, you must specify the "
+                        "detector gain as a string ('high' or 'low') "
+                        "when instantiating the HIRESPipeline class.")
+            else:
+                gains = _determine_gains(gain)
+            for detector_number in range(1, 4):
+                image_header = hdul[detector_number].header
+                gain = gains[detector_number - 1]
+                detector_slice = _parse_mosaic_detector_slice(
+                    image_header['DATASEC'])
+                detector_image = np.flipud(
+                    hdul[detector_number].data.T[detector_slice].astype(float))
+                detector_image *= gain
+                images.append(detector_image)
+            data_image = np.concatenate(
+                (images[0], gap01, images[1], gap12, images[2]), axis=0)
+            data_image[:, -bad_columns:] = 0
+        else:  # pre-2004 single detector
+            slice0 = header['PREPIX']
+            slice1 = header['NAXIS1'] - header['POSTPIX']
+            data_image = hdul[0].data[:, slice0:slice1]
     return data_image * u.electron
 
 
@@ -163,16 +191,17 @@ def _get_images_from_directory(
     Make a list of CCDData objects of combined mosaic data.
     """
     files = sorted(directory.glob('*.fits*'))
+    n = len(files)
     images = []
-    for file in files:
+    for i, file in enumerate(files):
+        print(f'      {i + 1}/{n}: {file.name}', end=' ' * 25 + '\r')
         header = _get_header(file, slit_length=slit_length,
                              slit_width=slit_width,
                              spatial_binning=spatial_binning,
                              spectral_binning=spectral_binning)
-        data = CCDData(_combine_mosaic_image(file, gain=gain), header=header)
+        data = CCDData(_get_image_data(file, gain=gain), header=header)
         if remove_cosmic_rays:
             data = ccdproc.cosmicray_lacosmic(data)
-        data.data[np.where(data.data == 0)] = np.nan  # saturated pixels to NaN
         data_with_uncertainty = ccdproc.create_deviation(
             data, readnoise=readnoise, disregard_nan=True)
         images.append(data_with_uncertainty)
@@ -304,7 +333,7 @@ def _process_science_data(
     Wrapper function to apply all of the reduction steps to science data in a
     supplied directory.
     """
-    print(f'      Loading data and removing cosmic rays...')
+    print(f'      Loading data and removing cosmic rays...' + ' '*25)
     science_images = _get_images_from_directory(
         Path(file_directory, sub_directory),
         slit_length=slit_length, slit_width=slit_width,
@@ -313,9 +342,10 @@ def _process_science_data(
     count = len(science_images)
     reduced_science_images = []
     filenames = []
+    print('      Reducing data...' + ' '*25)
     for i, ccd_image in enumerate(science_images):
         filename = ccd_image.header['file_name']
-        print(f'      Reducing image {i + 1}/{count}: {filename}')
+        print(f'         {i + 1}/{count}: {filename}', end=' ' * 25 + '\r')
         rectified_data = order_bounds.rectify(ccd_data=ccd_image)
         bias_subtracted_data = ccdproc.subtract_bias(
             rectified_data, master=master_bias)
@@ -330,6 +360,13 @@ def _process_science_data(
             extinction_corrected_data = _extinction_correct(
                 rectified_data=flux_data,
                 wavelength_solution=wavelength_solution)
+            data = extinction_corrected_data.data
+            uncertainty = extinction_corrected_data.uncertainty.array
+            ind = np.isnan(data)
+            data[ind] = 0
+            uncertainty[ind] = 0
+            extinction_corrected_data.data = data
+            extinction_corrected_data.uncertainty.array = uncertainty
             reduced_science_images.append(extinction_corrected_data)
             filenames.append(filename)
     return reduced_science_images, filenames

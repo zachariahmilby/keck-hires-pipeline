@@ -5,10 +5,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 from astropy.nddata import CCDData, StdDevUncertainty
 from lmfit.models import GaussianModel, PolynomialModel
+from scipy.ndimage import shift
 from scipy.signal import find_peaks
 from sklearn.preprocessing import minmax_scale
 
 from hirespipeline.files import make_directory
+from hirespipeline.general import shift_params
+from hirespipeline.graphics import flux_cmap, flat_cmap, calculate_norm, \
+    nan_color, turn_off_axes
 
 
 class _OrderTraces:
@@ -17,17 +21,37 @@ class _OrderTraces:
     """
 
     def __init__(self, master_trace: CCDData):
-        self._master_trace = minmax_scale(master_trace.data)
+        self._master_trace = master_trace
+        self._normalized_data = self._process_data(master_trace.data)
         self._n_rows, self._n_cols = self._master_trace.data.shape
         self._selected_pixels = np.arange(0, self._n_cols, 128, dtype=int)
         self._starting_points = self._get_starting_points()
         self._pixels = np.arange(self._n_cols)
-        self._traces = self._select_traces()
+        self._traces = self._refine_traces()
 
-    def _fit_gaussian(self, center, col):
+    @staticmethod
+    def _process_data(data: np.ndarray):
+        ind = np.where(data == 0)
+        data = minmax_scale(data)
+        data[ind] = np.nan
+        return data
+
+    def _calculate_slit_half_length(self):
+        """
+        Calculate slit half-length in pixels.
+        """
+        slit_length = (self._master_trace.header['slit_length']
+                       / self._master_trace.header['spatial_bin_scale'])
+        return np.ceil(slit_length / 2).astype(int)
+
+    def _fit_gaussian(self, center, col, skip_if_nan: bool = False):
         center = int(center)
-        y = self._master_trace[center-15:center+16, col]
+        y = self._normalized_data[center-15:center+16, col]
         x = np.arange(center-15, center+16)
+        bad = np.where(np.isnan(y))[0]
+        if len(bad) > 0:
+            if skip_if_nan:
+                return np.nan
         good = np.where(~np.isnan(y))[0]
         model = GaussianModel()
         params = model.guess(y[good], x=x[good])
@@ -48,10 +72,37 @@ class _OrderTraces:
         Find peaks from trace image, fit a polynomial to their separation, then
         extrapolate for the full vertical pixel range of the composite image.
         """
-        vslice = self._master_trace[:, 0]
+        vslice = self._normalized_data[:, self._selected_pixels[0]]
         peaks, _ = find_peaks(vslice, height=0.2)
-        index = np.arange(len(peaks))
-        fit = self._fit_polynomial(peaks, index, 3)
+        peaks = peaks[1:-1]
+        x = np.arange(len(peaks))
+
+        gradient = np.gradient(peaks)
+        bad, _ = find_peaks(gradient)
+
+        if len(bad) > 0:
+            bad_extended = np.sort(np.concatenate((bad - 1, bad, bad + 1)))
+            x = np.arange(len(peaks))
+            good = [i for i in x if i not in bad_extended]
+
+            x = np.arange(len(good))
+            start = bad_extended[0]
+            peaks = peaks[good]
+            fit = self._fit_polynomial(y=peaks[:start], x=x[:start], degree=5)
+            pct = np.abs(1 - peaks / fit.eval(x=x))
+            ind = np.where(pct > 0.05)[0]
+            count = 0
+            while len(ind) > 0:
+                x[ind] += 1
+                fit = self._fit_polynomial(y=peaks[:ind[0]], x=x[:ind[0]],
+                                           degree=3)
+                pct = np.abs(1 - peaks / fit.eval(x=x))
+                ind = np.where(pct > 0.05)[0]
+                count += 1
+                if count > 100:
+                    break
+
+        fit = self._fit_polynomial(y=peaks, x=x, degree=5)
         extrapolated_peaks = fit.eval(x=np.arange(-10, len(peaks)+11))
         ind = np.where((extrapolated_peaks > 0) &
                        (extrapolated_peaks < self._n_rows))[0]
@@ -59,10 +110,9 @@ class _OrderTraces:
 
     def _find_initial_traces(self) -> (np.ndarray, int, bool):
         """
-        Calculate an initial trace using the third identified peak (should be
-        far enough for the whole trace to fall on the detector without any odd
-        effects. Also returns the initial spacing between this trace and its
-        adjacent traces.
+        Calculate initial traces using identified peaks in first column, which
+        should be far enough for the whole trace to fall on the detector
+        without any odd effects.
         """
         traces = np.full((self._starting_points.shape[0],
                           self._n_cols), fill_value=np.nan)
@@ -91,11 +141,13 @@ class _OrderTraces:
         initial_traces = self._find_initial_traces()
         n_rows, n_cols = initial_traces.shape
         vind = np.arange(n_rows)
-        expanded_traces = np.zeros_like(initial_traces)
+        vind_expanded = np.arange(-5, n_rows + 5 + 1, 1)
+        expanded_traces = np.zeros(
+            (vind_expanded.shape[0], initial_traces.shape[1]))
         for i in range(n_cols):
             vslice = initial_traces[:, i]
             fit = self._fit_polynomial(vslice, vind, 5)
-            expanded_traces[:, i] = fit.eval(x=vind)
+            expanded_traces[:, i] = fit.eval(x=vind_expanded)
         return expanded_traces
 
     def _select_traces(self) -> np.ndarray:
@@ -105,22 +157,57 @@ class _OrderTraces:
         expanded_traces = self._fill_in_missing_traces()
         selected_traces = []
         for trace in expanded_traces:
-            if (trace[0] > 0) & (trace[-1] < self._master_trace.shape[0] - 1):
+            if (trace[0] > self._normalized_data.shape[0] - 1) | \
+                    (trace[-1] < 0):
+                continue
+            else:
                 selected_traces.append(trace)
         return np.array(selected_traces)
+
+    def _refine_traces(self) -> np.ndarray:
+        selected_traces = self._select_traces()
+        refined_traces = np.zeros_like(selected_traces)
+        slit_half_width = self._calculate_slit_half_length()
+        shape = self._normalized_data.data.shape
+        n = selected_traces.shape[0]
+        for i, trace in enumerate(selected_traces):
+            print(f'      Refining trace... {i + 1}/{n}', end=' ' * 25 + '\r')
+            ub = trace + slit_half_width
+            lb = trace - slit_half_width
+            if (np.max(ub) > shape[0] - 1) or (np.min(lb) < 0):
+                refined_traces[i] = trace
+            else:
+                fit_centers = []
+                for col in range(shape[1]):
+                    center = self._fit_gaussian(
+                        trace[col], col, skip_if_nan=True)
+                    if np.isnan(center):
+                        center = trace[col]
+                    fit_centers.append(center)
+                fit_centers = np.array(fit_centers)
+                fit = self._fit_polynomial(
+                    y=fit_centers, x=self._pixels, degree=5)
+                refined_traces[i] = fit.eval(x=self._pixels)
+        return refined_traces
 
     # noinspection DuplicatedCode
     def quality_assurance(self, file_path: Path):
         fig, axis = plt.subplots(figsize=(8, 6), constrained_layout=True,
                                  clear=True)
-        axis.set_xticks([])
-        axis.set_yticks([])
-        axis.set_frame_on(False)
-        cmap = plt.get_cmap('viridis').copy()
-        cmap.set_bad((0.5, 0.5, 0.5))
-        axis.pcolormesh(self._master_trace, cmap=cmap)
+        axis.set_facecolor(nan_color)
+        turn_off_axes(axis)
+        cmap = flux_cmap()
+        display_data = self._normalized_data
+        display_data[np.isnan(display_data)] = 0
+        norm = calculate_norm(display_data)
+        axis.pcolormesh(display_data, cmap=cmap, norm=norm, zorder=2)
         for trace in self._traces:
-            axis.plot(self._pixels, trace, color='red', linewidth=0.5)
+            axis.plot(self._pixels, trace, color='red', linewidth=0.5,
+                      zorder=3)
+        xlim = axis.get_xlim()
+        axis.axvspan(xlim[0], xlim[-1], color=nan_color, zorder=1)
+        axis.set_xlim(xlim)
+        axis.set_ylim(np.min(self._traces) - 10, np.max(self._traces) + 10)
         savepath = Path(file_path, 'quality_assurance', 'order_traces.jpg')
         make_directory(savepath.parent)
         plt.savefig(savepath, dpi=600)
@@ -140,59 +227,70 @@ class _OrderBounds:
     def __init__(self, order_traces: _OrderTraces, master_flat: CCDData):
         self._order_traces = order_traces
         self._master_flat = master_flat
-        self._upper_bounds, self._lower_bounds = self._calculate_order_bounds()
         self._slit_length = 2 * self._calculate_slit_half_length()
+        self._lower_bounds = self._calculate_order_lower_bound()
         self._n_pixels = len(self._order_traces.pixels)
 
     def _calculate_slit_half_length(self):
+        """
+        Calculate slit half-length in pixels.
+        """
         slit_length = (self._master_flat.header['slit_length']
                        / self._master_flat.header['spatial_bin_scale'])
         return np.ceil(slit_length / 2).astype(int)
 
     def _make_artificial_flatfield(self) -> np.ndarray:
+        """
+        Use the traces to construct an artifical binary flatfield.
+        """
         artificial_flatfield = np.zeros_like(self._master_flat.data)
-        slit_half_width = self._calculate_slit_half_length()
+        slit_half_length = self._calculate_slit_half_length()
         for trace in self._order_traces.traces:
             for i in self._order_traces.pixels:
                 j = np.round(trace[i]).astype(int)
-                lower = j-slit_half_width
+                lower = j-slit_half_length
                 if lower < 0:
                     lower = 0
-                upper = j+slit_half_width+1
+                upper = j+slit_half_length+1
                 if upper >= artificial_flatfield.shape[0]:
                     upper = artificial_flatfield.shape[0]
                 artificial_flatfield[lower:upper, i] = 1
         return artificial_flatfield
 
     def _correlate_flat_with_artificial_flat(self):
+        """
+        Cross-correlate the binary flatfield with the observed master flat to
+        determine any offset between the location of the trace and the edges of
+        the flat.
+        """
         artificial_flatfield = self._make_artificial_flatfield()
-        slit_length = self._calculate_slit_half_length()
+        half_slit = self._calculate_slit_half_length()
+        shifts = np.linspace(-half_slit, half_slit, 100)
         ccr = np.array(
             [np.nansum(self._master_flat.data
-                       * np.roll(artificial_flatfield, i, axis=0))
-             for i in range(-slit_length, slit_length)])
-        offset = slit_length - ccr.argmax()
-        return offset
+                       * shift(artificial_flatfield, [i, 0], **shift_params))
+             for i in shifts])
+        return shifts[ccr.argmax()]
 
-    def _calculate_order_bounds(self):
+    def _calculate_order_lower_bound(self):
+        """
+        Calcualte the lower bounds of each order.
+        """
         offset = self._correlate_flat_with_artificial_flat()
         half_width = self._calculate_slit_half_length()
-        upper_bounds = np.round(self._order_traces.traces).astype(int)
-        upper_bounds += half_width - offset + 1
-        lower_bounds = np.round(self._order_traces.traces).astype(int)
-        lower_bounds -= half_width + offset
-        return upper_bounds, lower_bounds
+        lower_bounds = self._order_traces.traces - half_width + offset
+        return lower_bounds
 
     @staticmethod
     def _get_padded_data(ccd_data: CCDData,
                          n: int = 100) -> (np.ndarray, np.ndarray):
         """
-        Add some extra rows of NaNs so that the full slit width can be captured
-        near the detector edges.
+        Add some extra rows of zeros so that the full slit width can be
+        captured near the detector edges.
         """
         data = ccd_data.data
         unc = ccd_data.uncertainty.array
-        extra = np.full((n, data.shape[1]), fill_value=np.nan)
+        extra = np.zeros((n, data.shape[1]))
         data = np.concatenate((extra, data, extra), axis=0)
         unc = np.concatenate((extra, unc, extra), axis=0)
         return data, unc, n
@@ -204,14 +302,20 @@ class _OrderBounds:
         rectified_data = []
         rectified_uncertainty = []
         data, uncertainty, n = self._get_padded_data(ccd_data=ccd_data)
-        for ub, lb in zip(self._upper_bounds + n, self.lower_bounds + n):
+        nans = np.isnan(data)
+        data[nans] = 0.0
+        uncertainty[nans] = 0.0
+        s_ = np.s_[:self._slit_length + 1]
+        for check, lb in enumerate(self.lower_bounds + n):
             rectified_order_data = np.zeros(
                 (self._slit_length + 1, self._n_pixels))
             rectified_order_unc = np.zeros(
                 (self._slit_length + 1, self._n_pixels))
             for i in range(self._n_pixels):
-                rectified_order_data[:, i] = data[lb[i]:ub[i], i]
-                rectified_order_unc[:, i] = uncertainty[lb[i]:ub[i], i]
+                shifted_data = shift(data[:, i], -lb[i], **shift_params)
+                shifted_unc = shift(uncertainty[:, i], -lb[i], **shift_params)
+                rectified_order_data[:, i] = shifted_data[s_]
+                rectified_order_unc[:, i] = shifted_unc[s_]
             rectified_data.append(rectified_order_data)
             rectified_uncertainty.append(rectified_order_unc)
         rectified_data = np.array(rectified_data)
@@ -224,27 +328,29 @@ class _OrderBounds:
     def quality_assurance(self, file_path: Path):
         fig, axis = plt.subplots(figsize=(8, 6), constrained_layout=True,
                                  clear=True)
-        axis.set_xticks([])
-        axis.set_yticks([])
-        axis.set_frame_on(False)
-        cmap = plt.get_cmap('bone').copy()
-        cmap.set_bad((0.5, 0.5, 0.5))
-        axis.pcolormesh(self._master_flat.data, cmap=cmap, alpha=0.5)
-        for ub, lb in zip(self._upper_bounds, self.lower_bounds):
+        axis.set_facecolor(nan_color)
+        turn_off_axes(axis)
+        cmap = flat_cmap()
+        norm = calculate_norm(self._master_flat.data)
+        axis.pcolormesh(self._master_flat.data, cmap=cmap, norm=norm,
+                        alpha=0.5, zorder=2)
+        for lb in self.lower_bounds:
+            ub = lb + self._slit_length
             axis.fill_between(self._order_traces.pixels, ub, lb, color='red',
-                              linewidth=0, alpha=0.25)
+                              linewidth=0, alpha=0.25, zorder=3)
             axis.plot(self._order_traces.pixels, ub, color='red',
-                      linewidth=0.5)
+                      linewidth=0.5, zorder=4)
             axis.plot(self._order_traces.pixels, lb, color='red',
-                      linewidth=0.5)
+                      linewidth=0.5, zorder=4)
+        xlim = axis.get_xlim()
+        axis.axvspan(xlim[0], xlim[-1], color=nan_color, zorder=1)
+        axis.set_xlim(xlim)
+        axis.set_ylim(np.min(self.lower_bounds) - 10,
+                      np.max(self.lower_bounds) + self._slit_length + 10)
         savepath = Path(file_path, 'quality_assurance', 'order_edges.jpg')
         make_directory(savepath.parent)
         plt.savefig(savepath, dpi=600)
         plt.close(fig)
-
-    @property
-    def upper_bounds(self) -> np.ndarray:
-        return self._upper_bounds
 
     @property
     def lower_bounds(self) -> np.ndarray:

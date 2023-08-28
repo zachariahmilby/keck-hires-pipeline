@@ -45,8 +45,7 @@ class _WavelengthSolution:
         dimension. Also normalize them. To account for overlapping orders, I am
         only selecting the middle 4 rows of data.
         """
-        spectra = np.full(self._order_bounds.lower_bounds.shape,
-                          fill_value=np.nan)
+        spectra = np.zeros(self._order_bounds.lower_bounds.shape)
         rectified_arcs = self._order_bounds.rectify(self._master_arc).data
         bottom = int(rectified_arcs.shape[1] / 2 - 2)
         top = int(rectified_arcs.shape[1] / 2 + 2) + 1
@@ -59,10 +58,14 @@ class _WavelengthSolution:
         return spectra
 
     @staticmethod
-    def _load_templates(cross_disperser: str = 'red'):
+    def _load_templates(cross_disperser: str = 'red',
+                        detector_layout: str = 'mosaic'):
+        if (cross_disperser == 'blue') & (detector_layout == 'legacy'):
+            raise NotImplementedError('Pre-2004 legacy data with blue cross '
+                                      'disperser not yet implemented. Sorry!')
         template_filepath = Path(
             package_directory, 'anc',
-            f'arc_templates_{cross_disperser}.pickle')
+            f'{detector_layout}_arc_templates_{cross_disperser}.pickle')
         return pickle.load(open(template_filepath, 'rb'))
 
     @staticmethod
@@ -88,7 +91,9 @@ class _WavelengthSolution:
         cross_disperser_angle = \
             self._master_arc.header['cross_disperser_angle']
         cross_disperser = self._master_arc.header['cross_disperser']
-        templates = self._load_templates(cross_disperser=cross_disperser)
+        detector_layout = self._master_arc.header['detector_layout']
+        templates = self._load_templates(cross_disperser=cross_disperser,
+                                         detector_layout=detector_layout)
         echelle_angles = np.array([template['echelle_angle']
                                    for template in templates])
         cross_disperser_angles = np.array([template['cross_disperser_angle']
@@ -200,10 +205,23 @@ class _WavelengthSolution:
                             new_centers.append(ind + fit_center)
                     except IndexError:
                         continue
-            params = solution_model.guess(new_lines, x=new_centers)
-            fit = solution_model.fit(new_lines, params, x=new_centers)
-            new_fit_centers[i] = fit.eval(x=self._pixels)
-            new_fit_edges[i] = fit.eval(x=self._pixel_edges)
+            if len(new_lines) < 7:
+                new_fit_centers[i] = fit_centers[i]
+                new_fit_edges[i] = fit_edges[i]
+            else:
+                try:
+                    with warnings.catch_warnings():
+                        warnings.simplefilter(
+                            'ignore', category=np.RankWarning)
+                        params = solution_model.guess(
+                            new_lines, x=new_centers)
+                        fit = solution_model.fit(
+                            new_lines, params, x=new_centers)
+                        new_fit_centers[i] = fit.eval(x=self._pixels)
+                        new_fit_edges[i] = fit.eval(x=self._pixel_edges)
+                except TypeError:
+                    new_fit_centers[i] = fit_centers[i]
+                    new_fit_edges[i] = fit_edges[i]
             used_pixels.append(new_centers)
             used_wavelengths.append(new_lines)
         return {'fit_centers': new_fit_centers,

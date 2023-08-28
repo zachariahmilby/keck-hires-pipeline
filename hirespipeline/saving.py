@@ -20,7 +20,7 @@ def fix_nonprimary_header_1d(header: fits.Header, unit: str):
     header.append(('BUNIT', f'{unit}', 'data physical units'))
 
 
-# noinspection PyTypeChecker
+# noinspection PyTypeChecker, DuplicatedCode
 def _save_as_fits(data_header: dict, data: np.ndarray, uncertainty: np.ndarray,
                   unit: str or None, data_type: str, savepath: Path,
                   target: str = None,

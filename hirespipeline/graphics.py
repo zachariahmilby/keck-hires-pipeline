@@ -10,11 +10,14 @@ from hirespipeline.general import package_directory
 """Location of Matplotlib runtime configuration."""
 rcparams = Path(package_directory, 'anc', 'rcparams.mplstyle')
 
+nan_color = (0.75, 0.75, 0.75)
+
 
 def turn_off_axes(axis: plt.Axes):
     """
     Turn off ticks and tick numbers.
     """
+    axis.set_frame_on(False)
     axis.set_xticks([])
     axis.set_yticks([])
 
@@ -23,36 +26,51 @@ def calculate_norm(data: np.ndarray, percentile=99):
     """
     Calculate a 99th-percentile linear normalization.
     """
-    vmin = np.nanpercentile(data[:, :3584], 100-percentile)
-    vmax = np.nanpercentile(data[:, :3584], percentile)
+    tempdata = data.copy().flatten()
+    tempdata = tempdata[np.where(tempdata > 0)]
+    vmin = np.nanpercentile(tempdata, 100-percentile)
+    vmax = np.nanpercentile(tempdata, percentile)
     return colors.Normalize(vmin=vmin, vmax=vmax)
+
+
+def _get_cmap(name: str):
+    cmap = plt.get_cmap(name).copy()
+    cmap.set_bad(nan_color)
+    return cmap
 
 
 def bias_cmap():
     """
     Colormap "cividis" for displaying bias data.
     """
-    cmap = plt.get_cmap('cividis').copy()
-    cmap.set_bad((0.75, 0.75, 0.75))
-    return cmap
+    return _get_cmap('cividis')
 
 
 def arc_cmap():
     """
     Colormap "inferno" for displaying bias data.
     """
-    cmap = plt.get_cmap('inferno').copy()
-    cmap.set_bad((0.75, 0.75, 0.75))
-    return cmap
+    return _get_cmap('inferno')
 
 
 def flux_cmap():
     """
     Colormap "viridis" for displaying flux data.
     """
-    cmap = plt.get_cmap('viridis').copy()
-    cmap.set_bad((0.75, 0.75, 0.75))
-    return cmap
+    return _get_cmap('viridis')
+
+
+def flat_cmap():
+    """
+    Colormap "bone" for displaying flatfield data.
+    """
+    return _get_cmap('bone')
+
+
+def _parse_legacy_detector_slice(header: fits.Header) -> np.s_:
+    slice0 = header['PREPIX']
+    slice1 = header['NAXIS1'] - header['POSTPIX']
+    return np.s_[:, slice0:slice1]
 
 
 def _parse_mosaic_detector_slice(slice_string: str) -> tuple[slice, slice]:
@@ -63,8 +81,9 @@ def _parse_mosaic_detector_slice(slice_string: str) -> tuple[slice, slice]:
     indices = np.array(slice_string.replace(':', ',').replace('[', '')
                        .replace(']', '').split(',')).astype(int)
     indices[[0, 2]] -= 1
-    return slice(indices[0], indices[1], 1), slice(indices[2], indices[3],
-                                                   1)
+    return np.s_[indices[0]:indices[1], indices[2]:indices[3]]
+    # return slice(indices[0], indices[1], 1), slice(indices[2], indices[3],
+    #                                                1)
 
 
 def _get_mosaic_detector_corner_coordinates(

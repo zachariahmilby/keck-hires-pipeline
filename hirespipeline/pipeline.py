@@ -9,7 +9,7 @@ from astropy.nddata import CCDData
 
 from hirespipeline.files import make_directory
 from hirespipeline.graphics import rcparams, turn_off_axes, calculate_norm, \
-    bias_cmap, flux_cmap
+    bias_cmap, flux_cmap, nan_color
 from hirespipeline.image_processing import _make_master_bias, \
     _make_master_flux, _make_master_trace, _process_science_data
 from hirespipeline.order_tracing import _OrderTraces, _OrderBounds
@@ -24,24 +24,25 @@ def stack_orders(rectified_data: np.ndarray, dy=3):
         fill_value=np.nan)
     for i in range(n_orders):
         stacked_data[i*(n_spa + dy):i*(n_spa + dy)+n_spa] = rectified_data[i]
+    stacked_data[np.where(np.isnan(stacked_data))] = np.nan
     return stacked_data
 
 
+# noinspection DuplicatedCode
 def _calibration_qa_graphic(rectified_data: CCDData,
                             cmap: colors.Colormap, savename: Path):
     with plt.style.context(rcparams):
         fig, axes = plt.subplots(1, 2, figsize=(8, 4),
                                  constrained_layout=True, sharex='all',
                                  sharey='all', clear=True)
+        [axis.set_facecolor(nan_color) for axis in axes.ravel()]
         [turn_off_axes(axis) for axis in axes.ravel()]
-        img0 = axes[0].pcolormesh(stack_orders(rectified_data.data),
-                                  cmap=cmap,
-                                  norm=calculate_norm(rectified_data.data),
-                                  rasterized=True)
+        data = stack_orders(rectified_data.data)
+        img0 = axes[0].pcolormesh(
+            data, cmap=cmap, norm=calculate_norm(data), rasterized=True)
+        unc = stack_orders(rectified_data.uncertainty.array)
         img1 = axes[1].pcolormesh(
-            stack_orders(rectified_data.uncertainty.array), cmap=cmap,
-            norm=calculate_norm(rectified_data.uncertainty.array, ),
-            rasterized=True)
+            unc, cmap=cmap, norm=calculate_norm(unc), rasterized=True)
         plt.colorbar(img0, ax=axes[0], label=f'{rectified_data.unit}')
         axes[0].set_title('Data')
         plt.colorbar(img1, ax=axes[1],
@@ -52,27 +53,27 @@ def _calibration_qa_graphic(rectified_data: CCDData,
         plt.close(fig)
 
 
+# noinspection DuplicatedCode
 def _science_qa_graphic(rectified_data: CCDData,
                         cmap: colors.Colormap, savename: Path):
     with plt.style.context(rcparams):
         fig, axes = plt.subplots(1, 3, figsize=(12, 4),
                                  constrained_layout=True, sharex='all',
                                  sharey='all', clear=True)
+        [axis.set_facecolor(nan_color) for axis in axes.ravel()]
         [turn_off_axes(axis) for axis in axes.ravel()]
         data = stack_orders(rectified_data.data)
         unc = stack_orders(rectified_data.uncertainty.array)
         with warnings.catch_warnings():
             warnings.simplefilter('ignore', category=RuntimeWarning)
-            snr = data/unc
+            snr = data / unc
         img0 = axes[0].pcolormesh(data, cmap=cmap,
-                                  norm=calculate_norm(rectified_data.data,
-                                                      percentile=95),
+                                  norm=calculate_norm(data, percentile=95),
                                   rasterized=True)
         plt.colorbar(img0, ax=axes[0], label=f'{rectified_data.unit}')
         img1 = axes[1].pcolormesh(
             unc, cmap=cmap,
-            norm=calculate_norm(rectified_data.uncertainty.array,
-                                percentile=95),
+            norm=calculate_norm(unc, percentile=95),
             rasterized=True)
         plt.colorbar(img1, ax=axes[1], label=f'{rectified_data.unit}')
         img2 = axes[2].pcolormesh(snr, cmap=cmap,
@@ -197,13 +198,31 @@ class HIRESPipeline:
         return original_filename.replace('.fits', '_reduced.fits')
 
     # noinspection DuplicatedCode
-    def run(self):
+    def run(self, save_graphics: bool = True, test_trace: bool = False):
+        """
+        Run the HIRES pipeline.
+
+        Parameters
+        ----------
+        save_graphics : bool
+            Whether or not to save a summary graphic along with the reduced
+            data files. There are memory leaks in Matplotlib, and I've done by
+            best, but if the pipeline ends up crashing it might be best to try
+            to save files without summary graphics.
+
+            Note: it will still save the trace and order edge graphics, since
+            those are essential for quality assurance.
+        test_trace: bool
+            If you want to run the pipeline just far enough to test the order
+            detection algorithm, set this to True. Mostly useful for my own
+            debugging purposes.
+        """
         t0 = datetime.now(timezone.utc)
         print(f'Running HIRES data reduction pipeline on '
               f'{str(self._file_directory)}')
 
         # make master calibration detector images
-        print('   Making master bias image...')
+        print('   Making master bias image...' + ' '*25)
         master_bias = _make_master_bias(
             file_directory=self._file_directory,
             slit_length=self._slit_length,
@@ -212,7 +231,7 @@ class HIRESPipeline:
             spectral_binning=self._spectral_binning,
             gain=self._gain)
 
-        print('   Making master flat image...')
+        print('   Making master flat image...' + ' '*25)
         master_flat = _make_master_flux(
             file_directory=self._file_directory,
             flux_type='flat',
@@ -223,7 +242,7 @@ class HIRESPipeline:
             spectral_binning=self._spectral_binning,
             gain=self._gain)
 
-        print('   Making master arc image...')
+        print('   Making master arc image...' + ' '*25)
         master_arc = _make_master_flux(file_directory=self._file_directory,
                                        flux_type='arc',
                                        master_bias=master_bias,
@@ -233,7 +252,7 @@ class HIRESPipeline:
                                        spectral_binning=self._spectral_binning,
                                        gain=self._gain)
 
-        print('   Tracing echelle orders...')
+        print('   Making master trace image...' + ' '*25)
         master_trace = _make_master_trace(
             file_directory=self._file_directory, master_bias=master_bias,
             slit_length=self._slit_length,
@@ -241,83 +260,98 @@ class HIRESPipeline:
             spatial_binning=self._spatial_binning,
             spectral_binning=self._spectral_binning,
             gain=self._gain)
+        print('   Tracing echelle orders...' + ' ' * 25)
         order_traces = _OrderTraces(master_trace=master_trace)
         order_traces.quality_assurance(Path(self._save_directory))
-        order_bounds = _OrderBounds(order_traces=order_traces,
-                                    master_flat=master_flat)
-        order_bounds.quality_assurance(Path(self._save_directory))
 
-        print('   Calculating wavelength solution...')
-        wavelength_solution = _WavelengthSolution(master_arc=master_arc,
-                                                  master_flat=master_flat,
-                                                  order_bounds=order_bounds)
-        wavelength_solution.quality_assurance(Path(self._save_directory))
+        if not test_trace:
+            print('   Finding order edges...' + ' ' * 25)
+            order_bounds = _OrderBounds(order_traces=order_traces,
+                                        master_flat=master_flat)
+            order_bounds.quality_assurance(Path(self._save_directory))
 
-        print('   Rectifying master bias...')
-        rectified_master_bias = order_bounds.rectify(master_bias)
-        self._save_master_calibration_file(
-            ccd_data=rectified_master_bias,
-            order_numbers=wavelength_solution.order_numbers,
-            data_type='master bias',
-            savepath=Path(self._save_directory, 'master_bias.fits.gz'))
-        _calibration_qa_graphic(
-            rectified_data=rectified_master_bias, cmap=bias_cmap(),
-            savename=Path(self._save_directory, 'quality_assurance',
-                          'master_bias.jpg'))
+            print('   Calculating wavelength solution...' + ' '*25)
+            wavelength_solution = _WavelengthSolution(
+                master_arc=master_arc, master_flat=master_flat,
+                order_bounds=order_bounds)
+            wavelength_solution.quality_assurance(Path(self._save_directory))
 
-        print('   Rectifying master flat...')
-        rectified_master_flat = order_bounds.rectify(master_flat)
-        self._save_master_calibration_file(
-            ccd_data=rectified_master_flat,
-            order_numbers=wavelength_solution.order_numbers,
-            data_type='master flat',
-            savepath=Path(self._save_directory, 'master_flat.fits.gz'))
-        _calibration_qa_graphic(
-            rectified_data=rectified_master_flat, cmap=flux_cmap(),
-            savename=Path(self._save_directory, 'quality_assurance',
-                          'master_flat.jpg'))
+            print('   Rectifying master bias...' + ' '*25)
+            rectified_master_bias = order_bounds.rectify(master_bias)
+            self._save_master_calibration_file(
+                ccd_data=rectified_master_bias,
+                order_numbers=wavelength_solution.order_numbers,
+                data_type='master bias',
+                savepath=Path(self._save_directory, 'master_bias.fits.gz'))
+            if save_graphics:
+                _calibration_qa_graphic(
+                    rectified_data=rectified_master_bias, cmap=bias_cmap(),
+                    savename=Path(self._save_directory, 'quality_assurance',
+                                  'master_bias.jpg'))
 
-        print('   Rectifying master arc...')
-        rectified_master_arc = order_bounds.rectify(master_arc)
-        self._save_master_calibration_file(
-            ccd_data=rectified_master_arc,
-            order_numbers=wavelength_solution.order_numbers,
-            data_type='master arc',
-            savepath=Path(self._save_directory, 'master_arc.fits.gz'))
-        _calibration_qa_graphic(
-            rectified_data=rectified_master_arc, cmap=flux_cmap(),
-            savename=Path(self._save_directory, 'quality_assurance',
-                          'master_arc.jpg'))
+            print('   Rectifying master flat...' + ' '*25)
+            rectified_master_flat = order_bounds.rectify(master_flat)
+            self._save_master_calibration_file(
+                ccd_data=rectified_master_flat,
+                order_numbers=wavelength_solution.order_numbers,
+                data_type='master flat',
+                savepath=Path(self._save_directory, 'master_flat.fits.gz'))
+            if save_graphics:
+                _calibration_qa_graphic(
+                    rectified_data=rectified_master_flat, cmap=flux_cmap(),
+                    savename=Path(self._save_directory, 'quality_assurance',
+                                  'master_flat.jpg'))
 
-        for target, sub_directory in zip(self._target,
-                                         self._science_subdirectory):
-            print(f'   Reducing data in "{sub_directory}" directory...')
-            science_images, filenames = _process_science_data(
-                file_directory=self._file_directory,
-                sub_directory=sub_directory,
-                master_bias=rectified_master_bias,
-                master_flat=rectified_master_flat,
-                order_bounds=order_bounds,
-                wavelength_solution=wavelength_solution,
-                slit_length=self._slit_length,
-                slit_width=self._slit_width,
-                spatial_binning=self._spatial_binning,
-                spectral_binning=self._spectral_binning,
-                gain=self._gain)
-            for image, filename in zip(science_images, filenames):
-                if filename.split('.')[-1] == 'gz':
-                    ext = '.fits.gz'
-                else:
-                    ext = '.fits'
-                self._save_science_file(
-                    reduced_data=image, target=target,
+            print('   Rectifying master arc...' + ' '*25)
+            rectified_master_arc = order_bounds.rectify(master_arc)
+            self._save_master_calibration_file(
+                ccd_data=rectified_master_arc,
+                order_numbers=wavelength_solution.order_numbers,
+                data_type='master arc',
+                savepath=Path(self._save_directory, 'master_arc.fits.gz'))
+            if save_graphics:
+                _calibration_qa_graphic(
+                    rectified_data=rectified_master_arc, cmap=flux_cmap(),
+                    savename=Path(self._save_directory, 'quality_assurance',
+                                  'master_arc.jpg'))
+
+            for target, sub_directory in zip(self._target,
+                                             self._science_subdirectory):
+                print(f'   Processing data in "{sub_directory}" directory...',
+                      end=' '*25 + '\n')
+                science_images, filenames = _process_science_data(
+                    file_directory=self._file_directory,
+                    sub_directory=sub_directory,
+                    master_bias=rectified_master_bias,
+                    master_flat=rectified_master_flat,
+                    order_bounds=order_bounds,
                     wavelength_solution=wavelength_solution,
-                    savepath=Path(self._save_directory, sub_directory,
-                                  filename.replace(ext, f'_reduced{ext}')))
-                _science_qa_graphic(
-                    rectified_data=image, cmap=flux_cmap(),
-                    savename=Path(self._save_directory, sub_directory,
-                                  filename.replace(ext, '_reduced.jpg')))
+                    slit_length=self._slit_length,
+                    slit_width=self._slit_width,
+                    spatial_binning=self._spatial_binning,
+                    spectral_binning=self._spectral_binning,
+                    gain=self._gain)
+                print(f'      Saving data...' + ' '*25)
+                count = len(science_images)
+                for i, (image, filename) in enumerate(
+                        zip(science_images, filenames)):
+                    if filename.split('.')[-1] == 'gz':
+                        ext = '.fits.gz'
+                    else:
+                        ext = '.fits'
+                    print(f'         {i + 1}/{count}: {filename}',
+                          end=' ' * 25 + '\r')
+                    self._save_science_file(
+                        reduced_data=image, target=target,
+                        wavelength_solution=wavelength_solution,
+                        savepath=Path(self._save_directory, sub_directory,
+                                      filename.replace(ext, f'_reduced{ext}')))
+                    if save_graphics:
+                        _science_qa_graphic(
+                            rectified_data=image, cmap=flux_cmap(),
+                            savename=Path(self._save_directory, sub_directory,
+                                          filename.replace(ext, '_reduced.jpg')
+                                          ))
 
         print(f'Processing complete, time elapsed '
               f'{datetime.now(timezone.utc) - t0}.')

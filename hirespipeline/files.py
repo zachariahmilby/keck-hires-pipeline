@@ -10,7 +10,7 @@ from astropy.io import fits
 from astropy.time import Time
 
 from hirespipeline.graphics import flux_cmap, _parse_mosaic_detector_slice, \
-    rcparams
+    rcparams, calculate_norm
 
 
 def check_if_directory_exists(directory: Path):
@@ -67,16 +67,18 @@ class _FilesQuicklook:
         left_column += fr'$\tt{{{filename}}}$' + '\n'
         left_column += fr'$\bf{{Observation\ Date\!:}}$ '
         left_column += fr'{datetime} UTC' + '\n'
+        left_column += fr'$\bf{{Observers\!:}}$ {header["OBSERVER"]}' + '\n'
+        left_column += fr'$\bf{{Observation\ Type\!:}}$ ' \
+                       fr'{header["OBSTYPE"]}' + '\n'
+        left_column += fr'$\bf{{Object\!:}}$ {header["OBJECT"]}' + '\n'
+        left_column += fr'$\bf{{Target\!:}}$ {header["TARGNAME"]}' + '\n'
         left_column += fr'$\bf{{Exposure\ Time\!:}}$ ' \
                        fr'{header["EXPTIME"]:.2f} seconds' + '\n'
         left_column += fr'$\bf{{Airmass\!:}}$ ' \
                        fr'{float(header["AIRMASS"])}' + '\n'
-        left_column += fr'$\bf{{Observers\!:}}$ {header["OBSERVER"]}' + '\n'
-        left_column += fr'$\bf{{Observation\ Type\!:}}$ ' \
-                       fr'{header["OBSTYPE"]}' + '\n'
-        left_column += fr'$\bf{{Decker\!:}}$ {header["DECKNAME"]}' + '\n'
 
-        right_column = fr'$\bf{{Lamp\!:}}$ {header["LAMPNAME"]}' + '\n'
+        right_column = fr'$\bf{{Decker\!:}}$ {header["DECKNAME"]}' + '\n'
+        right_column += fr'$\bf{{Lamp\!:}}$ {header["LAMPNAME"]}' + '\n'
         right_column += fr'$\bf{{Filter\ 1\!:}}$ {header["FIL1NAME"]}' + '\n'
         right_column += fr'$\bf{{Filter\ 2\!:}}$ {header["FIL2NAME"]}' + '\n'
         right_column += fr'$\bf{{Binning\!:}}$ {header["BINNING"]}' + '\n'
@@ -110,9 +112,7 @@ class _FilesQuicklook:
                     image_header['DATASEC'])
                 image = np.flipud(
                         hdul[detector].data.T[detector_slice].astype(float))
-                norm = colors.Normalize(
-                    vmin=np.nanpercentile(image[np.where(image > 0)], 1),
-                    vmax=np.nanpercentile(image[np.where(image > 0)], 99))
+                norm = calculate_norm(image)
                 img = axes[4-detector].pcolormesh(image, cmap=flux_cmap(),
                                                   norm=norm, rasterized=True)
                 cbar = plt.colorbar(img, ax=axes[4-detector], pad=0.02)
@@ -136,7 +136,8 @@ class _FilesQuicklook:
         datetime = Time(header['DATE_BEG'], format='isot', scale='utc').fits
         data = {'Filename': filename,
                 'Observation Date': datetime.replace('T', ' '),
-                'Object (Target)': header['OBJECT'],
+                'Object': header['OBJECT'],
+                'Target': header['TARGNAME'],
                 'Exposure Time [s]': np.round(header['EXPTIME'], 2),
                 'Observers': header['OBSERVER'],
                 'Observation Type': header["OBSTYPE"],
@@ -151,7 +152,7 @@ class _FilesQuicklook:
                 }
         return df.append(data, ignore_index=True)
 
-    def run(self):
+    def run(self, save_graphics: bool = True):
         files = sorted(self._directory.glob('*.fits'))
         files_zipped = sorted(self._directory.glob('*.fits.gz'))
         if (len(files) == 0) & (len(files_zipped) == 0):
@@ -161,7 +162,8 @@ class _FilesQuicklook:
         df = pd.DataFrame()
         for file in files:
             with fits.open(file) as hdul:
-                self._save_quicklook(hdul, file.name)
+                if save_graphics:
+                    self._save_quicklook(hdul, file.name)
                 with warnings.catch_warnings():
                     warnings.simplefilter('ignore', category=FutureWarning)
                     df = self._append_csv(df, hdul, file.name)
@@ -169,7 +171,7 @@ class _FilesQuicklook:
         df.to_csv(savepath, index=False)
 
 
-def create_quicklooks(directory: str or Path):
+def create_quicklooks(directory: str or Path, save_graphics: bool = True):
     """
     Wrapper function to create quicklooks in a directory containing FITS files.
 
@@ -177,10 +179,13 @@ def create_quicklooks(directory: str or Path):
     ----------
     directory : str or Path
         The path to the directory.
+    save_graphics : bool
+        Whether or not to save graphics. If False, it will only save a summary
+        CSV. Default is True.
 
     Returns
     -------
     None.
     """
 
-    _FilesQuicklook(directory).run()
+    _FilesQuicklook(directory).run(save_graphics=save_graphics)

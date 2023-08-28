@@ -27,7 +27,7 @@ def _extinction_correction(airmass: float, wavelengths: np.ndarray,
     Apply airmass-extinction correction.
     """
     extinction_data = _load_extinction_data()
-    extinction_corrected_data = np.full_like(rectified_data, fill_value=np.nan)
+    extinction_corrected_data = np.zeros_like(rectified_data)
     for order, data in enumerate(rectified_data):
         interp_extinction = np.interp(
             wavelengths[order], extinction_data['wavelength'],
