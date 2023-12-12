@@ -6,8 +6,13 @@ import matplotlib.colors as colors
 import matplotlib.pyplot as plt
 import numpy as np
 from astropy.nddata import CCDData
+from astropy.coordinates import Angle, SkyCoord
+from astroquery.jplhorizons import Horizons
+from astropy.time import Time
+import astropy.units as u
 
 from hirespipeline.files import make_directory
+from hirespipeline.general import naif_codes
 from hirespipeline.graphics import rcparams, turn_off_axes, calculate_norm, \
     bias_cmap, flux_cmap, nan_color
 from hirespipeline.image_processing import _make_master_bias, \
@@ -172,6 +177,23 @@ class HIRESPipeline:
                             f"{self._science_subdirectory} as subdirectories.")
 
     @staticmethod
+    def _find_closest_target(targets: [str], header: dict):
+        distances = []
+        ref_coord = SkyCoord(ra=Angle(header['ra'], unit=u.hour),
+                             dec=Angle(header['dec'], unit=u.degree))
+        ext = ''
+        if header['frame'] == 'apparent':
+            ext = '_app'
+        for target in targets:
+            eph = Horizons(id=naif_codes[target], location='568',
+                           epochs=Time(header['datetime']).jd).ephemerides()
+            coord = SkyCoord(ra=Angle(eph[f'RA{ext}']),
+                             dec=Angle(eph[f'DEC{ext}']))
+            distances.append(ref_coord.separation(coord))
+        closest = np.where(np.asarray(distances) == np.min(distances))[0][0]
+        return np.asarray(targets)[closest]
+
+    @staticmethod
     def _save_master_calibration_file(
             ccd_data: CCDData, order_numbers: np.ndarray, data_type: str,
             savepath: str or Path):
@@ -180,10 +202,11 @@ class HIRESPipeline:
                       unit=ccd_data.unit, data_type=data_type,
                       order_numbers=order_numbers, savepath=savepath)
 
-    @staticmethod
-    def _save_science_file(
-            reduced_data: CCDData, target: str,
-            wavelength_solution: _WavelengthSolution, savepath: str or Path):
+    def _save_science_file(self, reduced_data: CCDData, target: str or [str],
+                           wavelength_solution: _WavelengthSolution,
+                           savepath: str or Path):
+        if isinstance(target, list):
+            target = self._find_closest_target(target, reduced_data.header)
         _save_as_fits(data_header=reduced_data.header, data=reduced_data.data,
                       uncertainty=reduced_data.uncertainty.array,
                       unit=reduced_data.unit,
@@ -319,6 +342,7 @@ class HIRESPipeline:
                                              self._science_subdirectory):
                 print(f'   Processing data in "{sub_directory}" directory...',
                       end=' '*25 + '\n')
+
                 science_images, filenames = _process_science_data(
                     file_directory=self._file_directory,
                     sub_directory=sub_directory,

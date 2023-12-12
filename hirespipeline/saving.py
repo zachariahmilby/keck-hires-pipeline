@@ -40,10 +40,18 @@ def _save_as_fits(data_header: dict, data: np.ndarray, uncertainty: np.ndarray,
         header.append(('INSTRUME', 'HIRES', 'name of instrument'))
         header.append(('IMAGETYP', f'{data_type}', 'data type'))
         header.append(('BUNIT', f'{unit}', 'data physical units'))
-        try:
-            header.append(('OBJECT', f'{target}', 'name of target body'))
-        except KeyError:
-            pass
+        if data_type == 'master bias':
+            header.append(('TARGET', 'None (bias)', 'name of target object'))
+        elif data_type == 'master flat':
+            header.append(('TARGET', 'quartz flat lamp',
+                           'name of target object'))
+        elif data_type == 'master arc':
+            header.append(('TARGET', 'ThAr arc lamp', 'name of target object'))
+        else:
+            try:
+                header.append(('TARGET', f'{target}', 'name of target object'))
+            except KeyError:
+                pass
         try:
             header.append(('DATE-OBS', f"{data_header['datetime']}",
                            'UTC datetime at start of observation'))
