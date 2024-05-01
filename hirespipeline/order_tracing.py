@@ -171,14 +171,14 @@ class _OrderTraces:
         shape = self._normalized_data.data.shape
         n = selected_traces.shape[0]
         for i, trace in enumerate(selected_traces):
-            print(f'      Refining trace... {i + 1}/{n}', end=' ' * 25 + '\r')
+            print(f'      Refining trace {i + 1}/{n}...', end=' ' * 25 + '\r')
             ub = trace + slit_half_width
             lb = trace - slit_half_width
             if (np.max(ub) > shape[0] - 1) or (np.min(lb) < 0):
                 refined_traces[i] = trace
             else:
                 fit_centers = []
-                for col in range(shape[1]):
+                for col in np.arange(0, shape[1], 128):
                     center = self._fit_gaussian(
                         trace[col], col, skip_if_nan=True)
                     if np.isnan(center):
@@ -186,12 +186,13 @@ class _OrderTraces:
                     fit_centers.append(center)
                 fit_centers = np.array(fit_centers)
                 fit = self._fit_polynomial(
-                    y=fit_centers, x=self._pixels, degree=5)
+                    y=fit_centers, x=np.arange(0, shape[1], 128), degree=5)
                 refined_traces[i] = fit.eval(x=self._pixels)
         return refined_traces
 
     # noinspection DuplicatedCode
     def quality_assurance(self, file_path: Path):
+        print('      Saving quality assurance graphic...')
         fig, axis = plt.subplots(figsize=(8, 6), constrained_layout=True,
                                  clear=True)
         axis.set_facecolor(nan_color)
@@ -230,6 +231,7 @@ class _OrderBounds:
         self._slit_length = 2 * self._calculate_slit_half_length()
         self._lower_bounds = self._calculate_order_lower_bound()
         self._n_pixels = len(self._order_traces.pixels)
+        self._mask = np.ones_like(self._master_flat)
 
     def _calculate_slit_half_length(self):
         """
@@ -281,8 +283,25 @@ class _OrderBounds:
         lower_bounds = self._order_traces.traces - half_width + offset
         return lower_bounds
 
-    @staticmethod
-    def _get_padded_data(ccd_data: CCDData,
+    def _remove_overlap(
+            self, data, uncertainty, n) -> (np.ndarray, np.ndarray):
+        """
+        Find areas on the detector where order bounds overlap and set them to
+        zero.
+        """
+        shape = data.shape
+        lb = self.lower_bounds + n
+        ub = lb + self._slit_length
+        for lbi, ubi in zip(lb[1:], ub[:-1]):
+            if lbi[0] < ubi[0]:
+                for col in range(shape[1]):
+                    s_ = np.s_[np.floor(lbi[col]).astype(int)-1:
+                               np.ceil(ubi[col]).astype(int)+2, col]
+                    data[s_] = np.nan
+                    uncertainty[s_] = np.nan
+        return data, uncertainty
+
+    def _get_padded_data(self, ccd_data: CCDData,
                          n: int = 100) -> (np.ndarray, np.ndarray):
         """
         Add some extra rows of zeros so that the full slit width can be
@@ -293,6 +312,7 @@ class _OrderBounds:
         extra = np.zeros((n, data.shape[1]))
         data = np.concatenate((extra, data, extra), axis=0)
         unc = np.concatenate((extra, unc, extra), axis=0)
+        data, unc = self._remove_overlap(data, unc, n)
         return data, unc, n
 
     def rectify(self, ccd_data: CCDData) -> CCDData:
@@ -305,6 +325,10 @@ class _OrderBounds:
         nans = np.isnan(data)
         data[nans] = 0.0
         uncertainty[nans] = 0.0
+        mask = data.copy()
+        mask[np.where(mask > 0)] = 1.0
+        mask[np.where(mask < 0)] = 0.0
+        self._mask = mask
         s_ = np.s_[:self._slit_length + 1]
         for check, lb in enumerate(self.lower_bounds + n):
             rectified_order_data = np.zeros(
@@ -326,14 +350,15 @@ class _OrderBounds:
 
     # noinspection DuplicatedCode
     def quality_assurance(self, file_path: Path):
+        print('      Saving quality assurance graphic...')
         fig, axis = plt.subplots(figsize=(8, 6), constrained_layout=True,
                                  clear=True)
         axis.set_facecolor(nan_color)
         turn_off_axes(axis)
         cmap = flat_cmap()
         norm = calculate_norm(self._master_flat.data)
-        axis.pcolormesh(self._master_flat.data, cmap=cmap, norm=norm,
-                        alpha=0.5, zorder=2)
+        axis.pcolormesh(self._master_flat.data * self._mask, cmap=cmap,
+                        norm=norm, alpha=0.5, zorder=2)
         for lb in self.lower_bounds:
             ub = lb + self._slit_length
             axis.fill_between(self._order_traces.pixels, ub, lb, color='red',
@@ -359,3 +384,7 @@ class _OrderBounds:
     @property
     def slit_length(self) -> int:
         return self._slit_length
+
+    @property
+    def overlap_mask(self) -> np.ndarray:
+        return self._mask

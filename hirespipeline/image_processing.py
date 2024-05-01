@@ -148,11 +148,14 @@ def _get_image_data(file_path: Path, gain: str or None) -> u.Quantity:
         header = hdul[0].header
         binning = np.array(header['BINNING'].split(',')).astype(int)
         if len(hdul) > 1:  # post-2004 mosaic detectors
+            # empirically-derived horizontal offset between mosaic detectors
+            det_hoffsets = np.round(np.array([4, 7, 0])/binning[1]).astype(int)
+            max_hoffset = np.max(det_hoffsets)
             gap01 = np.full(
-                (int(detector_vertical_gaps[0] / binning[0]), 4096),
+                (int(detector_vertical_gaps[0]/binning[0]), 4096),
                 fill_value=0)
             gap12 = np.full(
-                (int(detector_vertical_gaps[1] / binning[0]), 4096),
+                (int(detector_vertical_gaps[1]/binning[0]), 4096),
                 fill_value=0)
             images = []
             if gain is None:
@@ -167,17 +170,23 @@ def _get_image_data(file_path: Path, gain: str or None) -> u.Quantity:
                         "when instantiating the HIRESPipeline class.")
             else:
                 gains = _determine_gains(gain)
-            for detector_number in range(1, 4):
+            for detector_number in [1, 2, 3]:
                 image_header = hdul[detector_number].header
-                gain = gains[detector_number - 1]
+                hoffset = det_hoffsets[detector_number-1]
+                gain = gains[detector_number-1]
                 detector_slice = _parse_mosaic_detector_slice(
                     image_header['DATASEC'])
                 detector_image = np.flipud(
                     hdul[detector_number].data.T[detector_slice].astype(float))
                 detector_image *= gain
-                images.append(detector_image)
+                shape = detector_image.shape
+                offset_image = np.full((shape[0], shape[1]+max_hoffset),
+                                       fill_value=0)
+                offset_image[:, hoffset:hoffset+shape[1]] = detector_image
+                images.append(offset_image)
             data_image = np.concatenate(
-                (images[0], gap01, images[1], gap12, images[2]), axis=0)
+                (images[0][:, max_hoffset:], gap01, images[1][:, max_hoffset:],
+                 gap12, images[2][:, max_hoffset:]), axis=0)
             data_image[:, -bad_columns:] = 0
         else:  # pre-2004 single detector
             slice0 = header['PREPIX']

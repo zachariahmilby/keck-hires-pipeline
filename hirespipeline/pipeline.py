@@ -241,6 +241,7 @@ class HIRESPipeline:
             debugging purposes.
         """
         t0 = datetime.now(timezone.utc)
+        print(f"\n{datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S.%f')}")
         print(f'Running HIRES data reduction pipeline on '
               f'{str(self._file_directory)}')
 
