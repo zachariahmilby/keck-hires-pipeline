@@ -1,7 +1,6 @@
 import warnings
 from pathlib import Path
 
-import matplotlib.colors as colors
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import numpy as np

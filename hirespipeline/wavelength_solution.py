@@ -1,13 +1,16 @@
 import pickle
 import warnings
 from pathlib import Path
-import astropy.units as u
 
+import astropy.units as u
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import numpy as np
 import pandas as pd
+from astropy.modeling.fitting import LevMarLSQFitter
+from astropy.modeling.models import Polynomial2D
 from astropy.nddata import CCDData
+from astropy.utils.exceptions import AstropyUserWarning
 from lmfit import CompositeModel
 from lmfit.models import PolynomialModel, RectangleModel, ConstantModel
 from lmfit.parameter import Parameters
@@ -16,31 +19,31 @@ from sklearn.metrics import r2_score
 from sklearn.preprocessing import minmax_scale
 
 from hirespipeline.files import make_directory
-from hirespipeline.general import package_directory, vac_to_air
+from hirespipeline.general import package_directory, vac_to_air, _log
 from hirespipeline.graphics import rcparams
 from hirespipeline.order_tracing import _OrderBounds
-
-
-# TODO: implement refinement with other templates
 
 
 class _WavelengthSolution:
 
     def __init__(self, master_arc: CCDData, master_flat: CCDData,
-                 order_bounds: _OrderBounds):
+                 order_bounds: _OrderBounds, log_path: Path):
         self._master_arc = master_arc
         self._master_flat = master_flat
         self._order_bounds = order_bounds
+        self._log_path = log_path
         self._pixels = np.arange(self._order_bounds.lower_bounds.shape[1])
         self._pixel_edges = np.linspace(
             0, self._pixels.shape[0], self._pixels.shape[0] + 1) - 0.5
         self._slit_width = self._get_slit_width()
         self._1d_arc_spectra = self._make_1d_spectra()
         self._order_numbers = self._get_order_numbers()
+        self._solutions_found = np.zeros_like(self._order_numbers, dtype=bool)
         self._fit_pixels = self._make_order_lists()
         self._fit_wavelengths = self._make_order_lists()
         self._fit_ions = self._make_order_lists()
-        self._wavelength_solution = self._build_initial_solution()
+        self._wavelength_solution = self._calculate_optimal_solution()
+        self._complete_solution()
 
     def _get_slit_width(self):
         slit_width = (self._master_arc.header['slit_width']
@@ -53,7 +56,7 @@ class _WavelengthSolution:
         dimension. Also normalize them. To account for overlapping orders, I am
         only selecting the middle 4 rows of data.
         """
-        print('      Making one-dimensional arc spectra...')
+        _log(self._log_path, '      Making one-dimensional arc spectra...')
         spectra = np.zeros(self._order_bounds.lower_bounds.shape)
         rectified_arcs = self._order_bounds.rectify(self._master_arc).data
         bottom = int(rectified_arcs.shape[1] / 2 - 2)
@@ -172,7 +175,7 @@ class _WavelengthSolution:
         return orders, spectral_offset
 
     def _get_order_numbers(self):
-        print('      Determining order numbers...')
+        _log(self._log_path, '      Determining order numbers...')
         template = self._get_sorted_solution_templates()[0]
         order_numbers, _ = self._cross_correlate_template(template)
         return order_numbers
@@ -234,6 +237,8 @@ class _WavelengthSolution:
         for s, wls in zip(centers_set, wavelengths_set):
             left = np.min(s).astype(int) - dx
             right = np.max(s).astype(int) + dx + 1
+            if (left < 32) | (right > self._pixels.size-32):
+                continue
             s_ = np.s_[left:right]
             pixel_subset = self._pixels[s_]
             arc_subset = arc_spectrum[s_]
@@ -266,7 +271,10 @@ class _WavelengthSolution:
             model += ConstantModel(prefix='const_')
             params.add(f'const_c', value=0.0)
 
-            fit = model.fit(arc_subset, params, x=pixel_subset)
+            try:
+                fit = model.fit(arc_subset, params, x=pixel_subset)
+            except ValueError:
+                continue
 
             for peak in range(n_peaks):
                 if fit.params[f'peak{peak}_center'].stderr is None:
@@ -279,26 +287,30 @@ class _WavelengthSolution:
 
         return centers, wavelengths, ions
 
-    def _fit_order(self, centers, wavelengths, ions, n_attempts: int = 10
-                   ) -> tuple[np.ndarray, np.ndarray, np.ndarray,
-                              np.ndarray, np.ndarray, np.ndarray, np.ndarray,
-                              np.ndarray]:
+    def _fit_order(self,
+                   centers,
+                   wavelengths,
+                   ions,
+                   n_attempts: int = 10):
 
         solution_model = PolynomialModel(degree=3)
         n_pixels = self._pixels.size
 
-        centers = np.array(centers)
-        wavelengths = np.array(wavelengths)
+        centers = np.array(centers).astype(float)
+        wavelengths = np.array(wavelengths).astype(float)
         ions = np.array(ions)
 
-        empty = (np.array([]), np.array([]), np.array([]), np.zeros(n_pixels),
-                 np.zeros(n_pixels),  np.zeros(n_pixels+1),
-                 np.zeros(n_pixels+1), np.array([]))
+        empty = (np.array([]), np.array([]), np.array([]),
+                 np.full(n_pixels, fill_value=np.nan),
+                 np.full(n_pixels+1, fill_value=np.nan),
+                 np.array([]), False)
 
-        if centers.size == 0:
+        if centers.size < 10:
             return empty
 
         for attempt in range(n_attempts):
+            if centers.size < 10:
+                return empty
             params = solution_model.guess(wavelengths, x=centers)
             fit = solution_model.fit(wavelengths, params, x=centers)
             absv_residual = np.abs(fit.residual)
@@ -334,6 +346,8 @@ class _WavelengthSolution:
                 centers = centers[keep]
                 wavelengths = wavelengths[keep]
                 ions = ions[keep]
+                if centers.size < 10:
+                    return empty
                 params = solution_model.guess(wavelengths, x=centers)
                 fit = solution_model.fit(wavelengths, params, x=centers)
                 params = solution_model.guess(centers, x=wavelengths)
@@ -341,112 +355,158 @@ class _WavelengthSolution:
                 residuals = inv_fit.residual
 
                 fit_centers = fit.eval(x=self._pixels)
-                fit_centers_unc = inv_fit.eval_uncertainty(x=fit_centers)
                 fit_edges = fit.eval(x=self._pixel_edges)
-                fit_edges_unc = inv_fit.eval_uncertainty(x=fit_edges)
 
-                return (centers, wavelengths, ions, fit_centers,
-                        fit_centers_unc, fit_edges, fit_edges_unc, residuals)
+                return (centers, wavelengths, ions, fit_centers, fit_edges,
+                        residuals, True)
 
         return empty
 
     # noinspection DuplicatedCode
-    def _build_initial_solution(self):
+    def _calculate_optimal_solution(self):
         """
-        Use closest-match template to build an initial wavelength solution.
+        Loop through all the templates and determine which one contains the
+        most identified lines for each order.
         """
-        print('      Building initial wavelength solution from best-match '
-              'template...')
-        template = self._get_sorted_solution_templates()[0]
+        _log(self._log_path,
+             '      Building optimal wavelength solution from templates...')
+        templates = self._get_sorted_solution_templates()
+        n_templates = len(templates)
         n_orders = self._order_numbers.size
+        n_pixels = self._pixels.size
+        n_edges = self._pixel_edges.size
 
-        fit_centers = np.zeros((n_orders, self._pixels.size))
-        fit_centers_unc = np.full_like(fit_centers, fill_value=np.nan)
-        fit_edges = np.zeros((n_orders, self._pixel_edges.size))
-        fit_edges_unc = np.full_like(fit_edges, fill_value=np.nan)
-        found_centers = []
-        found_wavelengths = []
-        found_ions = []
+        fit_centers = np.zeros((n_orders, n_pixels))
+        fit_edges = np.zeros((n_orders, n_edges))
+
+        solutions = {}
+        for order in self._order_numbers:
+            solutions[f'order{order}'] = {'used_pixels': [],
+                                          'used_wavelengths': [],
+                                          'used_ions': [],
+                                          'residual': []}
+
+        for n, template in enumerate(templates):
+
+            _log(self._log_path, f'         Template {n+1}/{n_templates}')
+
+            _, spectral_offset = self._cross_correlate_template(template)
+
+            for i, order in enumerate(self._order_numbers):
+
+                row = np.where(template['orders'] == order)[0]
+                if len(row) == 0:
+                    continue
+                else:
+                    row = row[0]
+
+                template_pixels = template['line_centers'][row]
+                template_wavelengths = template['line_wavelengths'][row]
+                if len(template_pixels) == 0:
+                    continue
+                template_pixels -= spectral_offset
+
+                select = np.where((template_pixels >= 0) &
+                                  (template_pixels < n_pixels))[0]
+
+                template_pixels = template_pixels[select]
+                template_wavelengths = template_wavelengths[select]
+
+                template_spectrum = self._make_1d_template_spectrum(
+                    template_pixels)
+                centers_set, wavelengths_set = self._find_sets(
+                    template_pixels, template_wavelengths)
+
+                centers, wavelengths, ions = self._fit_sets(
+                    centers_set, wavelengths_set, self._1d_arc_spectra[i],
+                    template_spectrum)
+
+                (centers, wavelengths, ions, best_fit_centers, best_fit_edges,
+                 residual, success) = self._fit_order(
+                    centers, wavelengths, ions)
+
+                used_pixels = len(solutions[f'order{order}']['used_pixels'])
+
+                if (len(centers) > used_pixels) & success:
+                    solutions[f'order{order}']['used_pixels'] = centers
+                    solutions[f'order{order}']['used_wavelengths'] = \
+                        wavelengths
+                    solutions[f'order{order}']['used_ions'] = ions
+                    fit_centers[i] = best_fit_centers
+                    fit_edges[i] = best_fit_edges
+                    solutions[f'order{order}']['residual'] = residual
+                    self._solutions_found[i] = success
+        used_pixels = []
+        used_wavelengths = []
+        used_ions = []
         residuals = []
 
-        _, spectral_offset = self._cross_correlate_template(template)
-
-        for i in range(n_orders):
-
-            row = np.where(
-                template['orders'] == self._order_numbers[i])[0]
-
-            # skip first and last order in all cases
-            if (i == 0) | (i == n_orders - 1) | (len(row) == 0):
-                found_centers.append([])
-                found_wavelengths.append([])
-                found_ions.append([])
-                residuals.append([])
-                continue
-            else:
-                row = row[0]
-
-            template_wavelengths = template['line_wavelengths'][row]
-            template_centers = template['line_centers'][row]
-            if len(template_centers) == 0:
-                found_centers.append([])
-                found_wavelengths.append([])
-                found_ions.append([])
-                residuals.append([])
-                continue
-            template_centers -= spectral_offset
-            template_spectrum = self._make_1d_template_spectrum(
-                template_centers)
-            centers_set, wavelengths_set = self._find_sets(
-                template_centers, template_wavelengths)
-
-            centers, wavelengths, ions = self._fit_sets(
-                centers_set, wavelengths_set, self._1d_arc_spectra[i],
-                template_spectrum)
-
-            (centers, wavelengths, ions,
-             best_fit_centers, best_fit_centers_unc,
-             best_fit_edges, best_fit_edges_unc,
-             residual) = self._fit_order(centers, wavelengths, ions)
-
-            found_centers.append(centers)
-            found_wavelengths.append(wavelengths)
-            found_ions.append(ions)
-            fit_centers[i] = best_fit_centers
-            fit_centers_unc[i] = best_fit_centers_unc
-            fit_edges[i] = best_fit_edges
-            fit_edges_unc[i] = best_fit_edges_unc
-            residuals.append(residual)
-
-        interp_model = PolynomialModel(degree=3)
-        fit_centers = self._fill_missing_orders(
-            fit_centers, interp_model, mask_boundaries=False)
-        fit_edges = self._fill_missing_orders(
-            fit_edges, interp_model, mask_boundaries=False)
+        for i, order in enumerate(self._order_numbers):
+            used_pixels.append(solutions[f'order{order}']['used_pixels'])
+            used_wavelengths.append(
+                solutions[f'order{order}']['used_wavelengths'])
+            used_ions.append(solutions[f'order{order}']['used_ions'])
+            residuals.append(solutions[f'order{order}']['residual'])
 
         solution = {'fit_centers': fit_centers,
-                    'fit_centers_unc': fit_centers_unc,
                     'fit_edges': fit_edges,
-                    'fit_edges_unc': fit_edges_unc,
-                    'used_pixels': found_centers,
-                    'used_wavelengths': found_wavelengths,
-                    'used_ions': found_ions,
-                    'residual': residuals}
+                    'used_pixels': used_pixels,
+                    'used_wavelengths': used_wavelengths,
+                    'used_ions': used_ions,
+                    'residuals': residuals}
 
         return solution
 
+    def _complete_solution(self) -> None:
+        pixel_centers, orders_centers = np.meshgrid(self._pixels,
+                                                    self._order_numbers)
+        pixel_edges, orders_edges = np.meshgrid(
+            self._pixel_edges, self._order_numbers)
+        model = Polynomial2D(degree=3)
+        fitter = LevMarLSQFitter()
+
+        solution_centers = self._wavelength_solution['fit_centers']
+        solution_edges = self._wavelength_solution['fit_edges']
+        used_pixels = self._wavelength_solution['used_pixels']
+        ind = []
+        missing = []
+        for i in range(self._order_numbers.size):
+            if ((len(used_pixels[i]) < 10) &
+                    (~np.isnan(np.sum(solution_centers[i])))):
+                missing.append(i)
+            else:
+                ind.append(i)
+        ind = np.array(ind)
+        missing = np.array(missing)
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings('ignore',
+                                    message='Model is linear in parameters',
+                                    category=AstropyUserWarning)
+            fit_centers = fitter(model, pixel_centers[ind],
+                                 orders_centers[ind], solution_centers[ind])
+            fit_edges = fitter(model, pixel_edges[ind], orders_edges[ind],
+                               solution_edges[ind])
+
+        solution_centers = fit_centers(pixel_centers, orders_centers)
+        solution_edges = fit_edges(pixel_edges, orders_edges)
+        for i in missing:
+            centers = solution_centers[i]
+            edges = solution_edges[i]
+            self._wavelength_solution['fit_centers'][i] = centers
+            self._wavelength_solution['fit_edges'][i] = edges
+            self._wavelength_solution['used_pixels'][i] = []
+            self._wavelength_solution['used_wavelengths'][i] = []
+            self._wavelength_solution['residuals'][i] = []
+
     @staticmethod
     def _latexify_ions(ions) -> list[str]:
-        return [i.replace('Th', r'Th\,').replace('Ar', r'Ar\,') for i in ions]
+        return [i.replace('Th', 'Th ').replace('Ar', 'Ar ') for i in ions]
 
     # noinspection DuplicatedCode
     def quality_assurance(self, file_path: Path):
-        print(f'      Saving quality assurance graphics...')
         with plt.style.context(rcparams):
-            n_orders = len(self._order_numbers)
             for i, order in enumerate(self._order_numbers):
-                print(f'         {i + 1}/{n_orders}: Order {order}...',
-                      end='\r')
                 fig, axes = plt.subplots(
                     3, 1, figsize=(4, 5), sharex='all',
                     gridspec_kw={'height_ratios': [3, 3, 1]},
@@ -462,35 +522,28 @@ class _WavelengthSolution:
                 ions = self._latexify_ions(
                     self._wavelength_solution['used_ions'][i])
                 best_fit = self._wavelength_solution['fit_centers'][i]
-                residual = self._wavelength_solution['residual'][i]
-                fit_unc = self._wavelength_solution['fit_edges_unc'][i]
+                residual = self._wavelength_solution['residuals'][i]
                 for j in range(pixels.size):
                     x = pixels[j]
                     wl = wavelengths[j]
                     ion = ions[j]
                     y = np.nanmax([spec1d[int(x)-3:int(x)+4]])
                     axes[0].annotate(
-                        fr'{wl:.4f} {ion}', xy=(x, y), xytext=(0, 15),
+                        fr'{wl:.4f} nm {ion}', xy=(x, y), xytext=(0, 15),
                         ha='left', textcoords='offset points', va='center',
                         rotation=90, rotation_mode='anchor',
                         transform_rotates_text=True, arrowprops=arrowprops,
                         fontsize=3)
-                axes[1].scatter(pixels + 0.5, wavelengths, color='grey', s=4)
-                axes[1].plot(self._pixels + 0.5, best_fit, color='red',
+                if pixels.size > 10:
+                    axes[1].scatter(pixels+0.5, wavelengths, color='grey', s=4)
+                axes[1].plot(self._pixels+0.5, best_fit, color='red',
                              linewidth=0.5)
 
                 axes[2].axhline(0, linestyle='--', color='grey')
                 axes[2].scatter(pixels, residual, color='k', s=4)
-                axes[2].fill_between(
-                    self._pixel_edges + 0.5, fit_unc, -fit_unc,
-                    color='grey', alpha=0.5)
-                axes[2].annotate('Fit uncertainty',
-                                 xy=(0, 1), xytext=(3, -3),
-                                 xycoords='axes fraction',
-                                 textcoords='offset points',
-                                 color='grey', ha='left', va='top')
-                if pixels.size == 0:
-                    axes[1].annotate('Solution interpolated from other orders',
+                if pixels.size <= 10:
+                    axes[1].annotate('Fewer than 10 lines identified' + '\n' +
+                                     'Solution interpolated from other orders',
                                      xy=(0, 1), xytext=(3, -3),
                                      xycoords='axes fraction',
                                      textcoords='offset points',
@@ -513,6 +566,9 @@ class _WavelengthSolution:
                 axes[2].set_ylabel('Residual [pix]')
                 axes[1].yaxis.set_major_locator(
                     ticker.MaxNLocator(integer=True))
+                ylim = np.max(np.abs(axes[2].get_ylim()))
+                axes[2].set_ylim(-ylim, ylim)
+                axes[2].yaxis.set_minor_locator(ticker.AutoMinorLocator())
                 savepath = Path(file_path, 'quality_assurance',
                                 'wavelength_solutions',
                                 f'order{self._order_numbers[i]}.jpg')

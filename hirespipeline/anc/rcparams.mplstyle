@@ -13,6 +13,7 @@ lines.markeredgewidth: 0
 lines.markersize: 4
 scatter.edgecolors: none
 axes.linewidth: 0.5
+patch.linewidth: 0.5
 axes.formatter.use_mathtext: True
 xtick.major.width: 0.5
 xtick.minor.width: 0.5

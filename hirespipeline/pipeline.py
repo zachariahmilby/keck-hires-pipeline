@@ -2,17 +2,17 @@ import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 
+import astropy.units as u
 import matplotlib.colors as colors
 import matplotlib.pyplot as plt
 import numpy as np
-from astropy.nddata import CCDData
 from astropy.coordinates import Angle, SkyCoord
-from astroquery.jplhorizons import Horizons
+from astropy.nddata import CCDData
 from astropy.time import Time
-import astropy.units as u
+from astroquery.jplhorizons import Horizons
 
 from hirespipeline.files import make_directory
-from hirespipeline.general import naif_codes
+from hirespipeline.general import naif_codes, _log, _make_log
 from hirespipeline.graphics import rcparams, turn_off_axes, calculate_norm, \
     bias_cmap, flux_cmap, nan_color
 from hirespipeline.image_processing import _make_master_bias, \
@@ -153,6 +153,10 @@ class HIRESPipeline:
             self._spatial_binning = spatial_binning
             self._spectral_binning = spectral_binning
             self._gain = gain
+        _make_log(self._save_directory)
+
+    def log(self, string: str):
+        _log(self._save_directory, string)
 
     @staticmethod
     def _determine_input_type(science_subdirectory):
@@ -241,21 +245,22 @@ class HIRESPipeline:
             debugging purposes.
         """
         t0 = datetime.now(timezone.utc)
-        print(f"\n{datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S.%f')}")
-        print(f'Running HIRES data reduction pipeline on '
-              f'{str(self._file_directory)}')
+        print('')
+        self.log(f"{datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S.%f')}")
+        self.log(f'Running HIRES data reduction pipeline on directory '
+                 f'"{str(self._file_directory)}"')
 
         # make master calibration detector images
-        print('   Making master bias image...' + ' '*25)
+        self.log('   Making master bias image...')
         master_bias = _make_master_bias(
             file_directory=self._file_directory,
             slit_length=self._slit_length,
             slit_width=self._slit_width,
             spatial_binning=self._spatial_binning,
             spectral_binning=self._spectral_binning,
-            gain=self._gain)
+            gain=self._gain, log_path=self._save_directory)
 
-        print('   Making master flat image...' + ' '*25)
+        self.log('   Making master flat image...')
         master_flat = _make_master_flux(
             file_directory=self._file_directory,
             flux_type='flat',
@@ -264,9 +269,9 @@ class HIRESPipeline:
             slit_width=self._slit_width,
             spatial_binning=self._spatial_binning,
             spectral_binning=self._spectral_binning,
-            gain=self._gain)
+            gain=self._gain, log_path=self._save_directory)
 
-        print('   Making master arc image...' + ' '*25)
+        self.log('   Making master arc image...')
         master_arc = _make_master_flux(file_directory=self._file_directory,
                                        flux_type='arc',
                                        master_bias=master_bias,
@@ -274,33 +279,36 @@ class HIRESPipeline:
                                        slit_width=self._slit_width,
                                        spatial_binning=self._spatial_binning,
                                        spectral_binning=self._spectral_binning,
-                                       gain=self._gain)
+                                       gain=self._gain,
+                                       log_path=self._save_directory)
 
-        print('   Making master trace image...' + ' '*25)
+        self.log('   Making master trace image...')
         master_trace = _make_master_trace(
             file_directory=self._file_directory, master_bias=master_bias,
             slit_length=self._slit_length,
             slit_width=self._slit_width,
             spatial_binning=self._spatial_binning,
             spectral_binning=self._spectral_binning,
-            gain=self._gain)
-        print('   Tracing echelle orders...' + ' ' * 25)
-        order_traces = _OrderTraces(master_trace=master_trace)
+            gain=self._gain, log_path=self._save_directory)
+        self.log('   Tracing echelle orders...')
+        order_traces = _OrderTraces(master_trace=master_trace,
+                                    log_path=self._save_directory)
         order_traces.quality_assurance(Path(self._save_directory))
 
         if not test_trace:
-            print('   Finding order edges...' + ' ' * 25)
+            self.log('   Finding order edges...')
             order_bounds = _OrderBounds(order_traces=order_traces,
-                                        master_flat=master_flat)
+                                        master_flat=master_flat,
+                                        log_path=self._save_directory)
             order_bounds.quality_assurance(Path(self._save_directory))
 
-            print('   Calculating wavelength solution...' + ' '*25)
+            self.log('   Calculating wavelength solution...')
             wavelength_solution = _WavelengthSolution(
                 master_arc=master_arc, master_flat=master_flat,
-                order_bounds=order_bounds)
+                order_bounds=order_bounds, log_path=self._save_directory)
             wavelength_solution.quality_assurance(Path(self._save_directory))
 
-            print('   Rectifying master bias...' + ' '*25)
+            self.log('   Rectifying master bias...')
             rectified_master_bias = order_bounds.rectify(master_bias)
             self._save_master_calibration_file(
                 ccd_data=rectified_master_bias,
@@ -313,7 +321,7 @@ class HIRESPipeline:
                     savename=Path(self._save_directory, 'quality_assurance',
                                   'master_bias.jpg'))
 
-            print('   Rectifying master flat...' + ' '*25)
+            self.log('   Rectifying master flat...')
             rectified_master_flat = order_bounds.rectify(master_flat)
             self._save_master_calibration_file(
                 ccd_data=rectified_master_flat,
@@ -326,7 +334,7 @@ class HIRESPipeline:
                     savename=Path(self._save_directory, 'quality_assurance',
                                   'master_flat.jpg'))
 
-            print('   Rectifying master arc...' + ' '*25)
+            self.log('   Rectifying master arc...')
             rectified_master_arc = order_bounds.rectify(master_arc)
             self._save_master_calibration_file(
                 ccd_data=rectified_master_arc,
@@ -341,8 +349,8 @@ class HIRESPipeline:
 
             for target, sub_directory in zip(self._target,
                                              self._science_subdirectory):
-                print(f'   Processing data in "{sub_directory}" directory...',
-                      end=' '*25 + '\n')
+                self.log(f'   Processing data in "{sub_directory}" '
+                         f'directory...')
 
                 science_images, filenames = _process_science_data(
                     file_directory=self._file_directory,
@@ -355,8 +363,8 @@ class HIRESPipeline:
                     slit_width=self._slit_width,
                     spatial_binning=self._spatial_binning,
                     spectral_binning=self._spectral_binning,
-                    gain=self._gain)
-                print(f'      Saving data...' + ' '*25)
+                    gain=self._gain, log_path=self._save_directory)
+                self.log(f'      Saving data...')
                 count = len(science_images)
                 for i, (image, filename) in enumerate(
                         zip(science_images, filenames)):
@@ -364,8 +372,7 @@ class HIRESPipeline:
                         ext = '.fits.gz'
                     else:
                         ext = '.fits'
-                    print(f'         {i + 1}/{count}: {filename}',
-                          end=' ' * 25 + '\r')
+                    self.log(f'         {i + 1}/{count}: {filename}')
                     self._save_science_file(
                         reduced_data=image, target=target,
                         wavelength_solution=wavelength_solution,
@@ -378,5 +385,5 @@ class HIRESPipeline:
                                           filename.replace(ext, '_reduced.jpg')
                                           ))
 
-        print(f'Processing complete, time elapsed '
-              f'{datetime.now(timezone.utc) - t0}.')
+        elapsed_time = datetime.now(timezone.utc) - t0
+        self.log(f'Reduction complete, time elapsed: {elapsed_time}.')

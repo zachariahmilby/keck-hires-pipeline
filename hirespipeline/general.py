@@ -21,6 +21,22 @@ naif_codes = {'Jupiter': '599', 'Io': '501', 'Europa': '502',
               'Ganymede': '503', 'Callisto': '504', 'Maunakea': '568'}
 
 
+def _make_log(path: Path):
+    with open(Path(path, 'log.txt'), 'w') as _:
+        pass
+
+
+def _write_log(path: Path, string: str):
+    with open(Path(path, 'log.txt'), 'a') as file:
+        file.write(string + '\n')
+
+
+def _log(path, string, silent: bool = False):
+    _write_log(path, string)
+    if not silent:
+        print(string)
+
+
 def air_to_vac(wavelength: u.Quantity) -> u.Quantity:
     """
     Implements the air to vacuum wavelength conversion described in eqn 65 of

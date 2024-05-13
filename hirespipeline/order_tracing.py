@@ -3,14 +3,16 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+from astropy.convolution import convolve, Gaussian1DKernel
 from astropy.nddata import CCDData, StdDevUncertainty
+from astropy.utils.exceptions import AstropyUserWarning
 from lmfit.models import GaussianModel, PolynomialModel
 from scipy.ndimage import shift
 from scipy.signal import find_peaks
 from sklearn.preprocessing import minmax_scale
 
 from hirespipeline.files import make_directory
-from hirespipeline.general import shift_params
+from hirespipeline.general import shift_params, _log
 from hirespipeline.graphics import flux_cmap, flat_cmap, calculate_norm, \
     nan_color, turn_off_axes
 
@@ -20,8 +22,9 @@ class _OrderTraces:
     Trace orders and find order boundaries.
     """
 
-    def __init__(self, master_trace: CCDData):
+    def __init__(self, master_trace: CCDData, log_path: Path):
         self._master_trace = master_trace
+        self._log_path = log_path
         self._normalized_data = self._process_data(master_trace.data)
         self._n_rows, self._n_cols = self._master_trace.data.shape
         self._selected_pixels = np.arange(0, self._n_cols, 128, dtype=int)
@@ -73,7 +76,11 @@ class _OrderTraces:
         extrapolate for the full vertical pixel range of the composite image.
         """
         vslice = self._normalized_data[:, self._selected_pixels[0]]
-        peaks, _ = find_peaks(vslice, height=0.2)
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', category=AstropyUserWarning)
+            smoothed_slice = convolve(vslice, Gaussian1DKernel(stddev=1),
+                                      boundary='extend')
+        peaks, _ = find_peaks(smoothed_slice, height=0.2)
         peaks = peaks[1:-1]
         x = np.arange(len(peaks))
 
@@ -165,20 +172,21 @@ class _OrderTraces:
         return np.array(selected_traces)
 
     def _refine_traces(self) -> np.ndarray:
+        _log(self._log_path, f'   Refining traces...')
         selected_traces = self._select_traces()
         refined_traces = np.zeros_like(selected_traces)
         slit_half_width = self._calculate_slit_half_length()
         shape = self._normalized_data.data.shape
         n = selected_traces.shape[0]
         for i, trace in enumerate(selected_traces):
-            print(f'      Refining trace {i + 1}/{n}...', end=' ' * 25 + '\r')
+            _log(self._log_path, f'      Order {i + 1}/{n}')
             ub = trace + slit_half_width
             lb = trace - slit_half_width
             if (np.max(ub) > shape[0] - 1) or (np.min(lb) < 0):
                 refined_traces[i] = trace
             else:
                 fit_centers = []
-                for col in np.arange(0, shape[1], 128):
+                for col in range(shape[1]):
                     center = self._fit_gaussian(
                         trace[col], col, skip_if_nan=True)
                     if np.isnan(center):
@@ -186,13 +194,12 @@ class _OrderTraces:
                     fit_centers.append(center)
                 fit_centers = np.array(fit_centers)
                 fit = self._fit_polynomial(
-                    y=fit_centers, x=np.arange(0, shape[1], 128), degree=5)
+                    y=fit_centers, x=self._pixels, degree=5)
                 refined_traces[i] = fit.eval(x=self._pixels)
         return refined_traces
 
     # noinspection DuplicatedCode
     def quality_assurance(self, file_path: Path):
-        print('      Saving quality assurance graphic...')
         fig, axis = plt.subplots(figsize=(8, 6), constrained_layout=True,
                                  clear=True)
         axis.set_facecolor(nan_color)
@@ -225,9 +232,11 @@ class _OrderTraces:
 
 class _OrderBounds:
 
-    def __init__(self, order_traces: _OrderTraces, master_flat: CCDData):
+    def __init__(self, order_traces: _OrderTraces, master_flat: CCDData,
+                 log_path: Path):
         self._order_traces = order_traces
         self._master_flat = master_flat
+        self._log_path = log_path
         self._slit_length = 2 * self._calculate_slit_half_length()
         self._lower_bounds = self._calculate_order_lower_bound()
         self._n_pixels = len(self._order_traces.pixels)
@@ -350,7 +359,6 @@ class _OrderBounds:
 
     # noinspection DuplicatedCode
     def quality_assurance(self, file_path: Path):
-        print('      Saving quality assurance graphic...')
         fig, axis = plt.subplots(figsize=(8, 6), constrained_layout=True,
                                  clear=True)
         axis.set_facecolor(nan_color)

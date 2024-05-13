@@ -11,7 +11,7 @@ from astropy.time import Time
 
 from hirespipeline.airmass_extinction import _extinction_correct
 from hirespipeline.general import readnoise, low_gain, high_gain, \
-    detector_vertical_gaps, bad_columns
+    detector_vertical_gaps, bad_columns, _log
 from hirespipeline.graphics import _parse_mosaic_detector_slice
 from hirespipeline.order_tracing import _OrderBounds
 from hirespipeline.wavelength_solution import _WavelengthSolution
@@ -198,7 +198,8 @@ def _get_image_data(file_path: Path, gain: str or None) -> u.Quantity:
 def _get_images_from_directory(
         directory: Path, slit_length: float, slit_width: float,
         spatial_binning: float, spectral_binning: float,
-        gain: str, remove_cosmic_rays: bool = False) -> list[CCDData]:
+        gain: str, remove_cosmic_rays: bool,
+        log_path: Path) -> list[CCDData]:
     """
     Make a list of CCDData objects of combined mosaic data.
     """
@@ -206,7 +207,7 @@ def _get_images_from_directory(
     n = len(files)
     images = []
     for i, file in enumerate(files):
-        print(f'      {i + 1}/{n}: {file.name}', end=' ' * 25 + '\r')
+        _log(log_path, f'         {i + 1}/{n}: {file.name}')
         header = _get_header(file, slit_length=slit_length,
                              slit_width=slit_width,
                              spatial_binning=spatial_binning,
@@ -281,7 +282,7 @@ def _make_median_flux(flux_images: list[CCDData]) -> CCDData:
 def _make_master_bias(file_directory: Path,
                       slit_length: float, slit_width: float,
                       spatial_binning: float, spectral_binning: float,
-                      gain: str) -> CCDData:
+                      gain: str, log_path: Path) -> CCDData:
     """
     Wrapper function to make a master bias detector image.
     """
@@ -290,7 +291,9 @@ def _make_master_bias(file_directory: Path,
                                              slit_width=slit_width,
                                              spatial_binning=spatial_binning,
                                              spectral_binning=spectral_binning,
-                                             gain=gain)
+                                             gain=gain,
+                                             remove_cosmic_rays=False,
+                                             log_path=log_path)
     master_bias = _make_median_bias(bias_images)
     return master_bias
 
@@ -299,7 +302,7 @@ def _make_master_flux(file_directory: Path, flux_type: str,
                       master_bias: CCDData,
                       slit_length: float, slit_width: float,
                       spatial_binning: float, spectral_binning: float,
-                      gain: str) -> CCDData:
+                      gain: str, log_path: Path) -> CCDData:
     """
     Wrapper function to make a master flat or arc detector image.
     """
@@ -308,7 +311,9 @@ def _make_master_flux(file_directory: Path, flux_type: str,
                                              slit_width=slit_width,
                                              spatial_binning=spatial_binning,
                                              spectral_binning=spectral_binning,
-                                             gain=gain)
+                                             gain=gain,
+                                             remove_cosmic_rays=False,
+                                             log_path=log_path)
     flux_images = [ccdproc.subtract_bias(image, master=master_bias)
                    for image in flux_images]
     master_flux = _make_median_flux(flux_images)
@@ -318,7 +323,7 @@ def _make_master_flux(file_directory: Path, flux_type: str,
 def _make_master_trace(file_directory: Path, master_bias: CCDData,
                        slit_length: float, slit_width: float,
                        spatial_binning: float, spectral_binning: float,
-                       gain: str) -> CCDData:
+                       gain: str, log_path: Path) -> CCDData:
     """
     Wrapper function to load the first trace file and make a master order trace
     image.
@@ -328,7 +333,9 @@ def _make_master_trace(file_directory: Path, master_bias: CCDData,
                                              slit_width=slit_width,
                                              spatial_binning=spatial_binning,
                                              spectral_binning=spectral_binning,
-                                             gain=gain)[0]
+                                             gain=gain,
+                                             remove_cosmic_rays=False,
+                                             log_path=log_path)[0]
     master_trace = ccdproc.subtract_bias(trace_image, master=master_bias)
     return master_trace
 
@@ -340,24 +347,24 @@ def _process_science_data(
         wavelength_solution: _WavelengthSolution,
         slit_length: float, slit_width: float,
         spatial_binning: float, spectral_binning: float,
-        gain: str) -> ([CCDData], [str]):
+        gain: str, log_path: Path) -> ([CCDData], [str]):
     """
     Wrapper function to apply all of the reduction steps to science data in a
     supplied directory.
     """
-    print(f'      Loading data and removing cosmic rays...' + ' '*25)
+    _log(log_path, f'      Loading data and removing cosmic rays...')
     science_images = _get_images_from_directory(
         Path(file_directory, sub_directory),
         slit_length=slit_length, slit_width=slit_width,
         spatial_binning=spatial_binning, spectral_binning=spectral_binning,
-        gain=gain, remove_cosmic_rays=True)
+        gain=gain, remove_cosmic_rays=True, log_path=log_path)
     count = len(science_images)
     reduced_science_images = []
     filenames = []
-    print('      Reducing data...' + ' '*25)
+    _log(log_path, '      Reducing data...')
     for i, ccd_image in enumerate(science_images):
         filename = ccd_image.header['file_name']
-        print(f'         {i + 1}/{count}: {filename}', end=' ' * 25 + '\r')
+        _log(log_path, f'         {i + 1}/{count}: {filename}')
         rectified_data = order_bounds.rectify(ccd_data=ccd_image)
         bias_subtracted_data = ccdproc.subtract_bias(
             rectified_data, master=master_bias)
