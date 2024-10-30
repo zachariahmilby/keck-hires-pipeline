@@ -15,7 +15,7 @@ reducing Keck HIRES observations. I built it primarily for a Galilean satellite
 aurora project I work on at Caltech with Katherine de Kleer, Mike Brown and 
 Maria Camarca and a collaborator at Boston University Carl Schmidt. I've 
 cobbled together many ideas and components from a variety of sources including 
-the Mauna Kea Echelle Extraction ``MAKEE``package[^3] and the ``HIRedux`` IDL 
+the Mauna Kea Echelle Extraction ``MAKEE`` package[^3] and the ``HIRedux`` IDL 
 reduction pipeline [^4] written by Jason X. Prochaska.
 
 If all goes well, this pipeline will:

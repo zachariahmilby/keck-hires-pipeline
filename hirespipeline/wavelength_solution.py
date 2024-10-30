@@ -321,7 +321,7 @@ class _WavelengthSolution:
             inv_fit = solution_model.fit(
                 centers[inv_sort], params, x=wavelengths[inv_sort])
             inv_absv_residual = np.abs(inv_fit.residual)
-            max_inv_absv_residual = np.max(inv_absv_residual)
+            max_inv_absv_residual = np.std(inv_absv_residual)
             rsquared = r2_score(wavelengths, fit.best_fit)
 
             if rsquared < 0.9999:

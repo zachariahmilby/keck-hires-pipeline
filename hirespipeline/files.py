@@ -7,9 +7,27 @@ import numpy as np
 import pandas as pd
 from astropy.io import fits
 from astropy.time import Time
+from tqdm import tqdm
 
 from hirespipeline.graphics import flux_cmap, _parse_mosaic_detector_slice, \
     rcparams, calculate_norm
+
+
+_csv_keys = ['Filename',
+             'Observation Date',
+             'Object',
+             'Target',
+             'Exposure Time [s]',
+             'Observers',
+             'Observation Type',
+             'Decker',
+             'Lamp',
+             'Filter 1',
+             'Filter 2',
+             'Binning',
+             'Airmass',
+             'Echelle Angle [deg]',
+             'Cross Disperser Angle [deg]']
 
 
 def check_if_directory_exists(directory: Path):
@@ -85,7 +103,7 @@ class _FilesQuicklook:
         right_column += fr'{header["XDISPERS"]}' + '\n'
         right_column += fr'$\bf{{Echelle\ Angle\!:}}$ '
         right_column += fr'${header["ECHANGL"]:.5f}\degree$' + '\n'
-        right_column += fr'$\bf{{Cross\ Disperser\ Angle:\!}}$ '
+        right_column += fr'$\bf{{Cross\ Disperser\ Angle\!:}}$ '
         right_column += fr'${header["XDANGL"]:.4f}\degree$'
 
         return left_column, right_column
@@ -149,7 +167,7 @@ class _FilesQuicklook:
                 'Echelle Angle [deg]': np.round(header['ECHANGL'], 5),
                 'Cross Disperser Angle [deg]': np.round(header['XDANGL'], 4)
                 }
-        return df.append(data, ignore_index=True)
+        return pd.concat([df, pd.DataFrame([data])], ignore_index=True)
 
     def run(self, save_graphics: bool = True):
         files = sorted(self._directory.glob('*.fits'))
@@ -158,8 +176,8 @@ class _FilesQuicklook:
             raise FileNotFoundError("No FITS files found in directory.")
         if len(files_zipped) != 0:
             files = files_zipped
-        df = pd.DataFrame()
-        for file in files:
+        df = pd.DataFrame(columns=_csv_keys)
+        for file in tqdm(files):
             with fits.open(file) as hdul:
                 if save_graphics:
                     self._save_quicklook(hdul, file.name)
