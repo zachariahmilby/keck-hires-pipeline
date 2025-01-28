@@ -10,14 +10,18 @@ from astropy.nddata import CCDData, StdDevUncertainty
 from astropy.time import Time
 
 from hirespipeline.airmass_extinction import _extinction_correct
-from hirespipeline.general import readnoise, low_gain, high_gain, \
-    detector_vertical_gaps, bad_columns, _log
+from hirespipeline.general import (readnoise, low_gain, high_gain,
+                                   detector_vertical_gaps, bad_columns, _log)
 from hirespipeline.graphics import _parse_mosaic_detector_slice
 from hirespipeline.order_tracing import _OrderBounds
 from hirespipeline.wavelength_solution import _WavelengthSolution
 
 
-def _parse_cross_disperser(cross_disperser: str):
+def _parse_cross_disperser(cross_disperser: str) -> str:
+    """
+    Determine name of cross disperser for FITS header. Essentially just
+    converts from 'uv' to 'blue' for HIRESb.
+    """
     if cross_disperser.lower() == 'red':
         return 'red'
     elif cross_disperser.lower() == 'uv':
@@ -37,7 +41,8 @@ def determine_detector_layout(hdul: fits.HDUList) -> str:
         raise Exception('Unknown detector layout!')
 
 
-def _get_header(file_path: Path, slit_length: float | None,
+def _get_header(file_path: Path,
+                slit_length: float | None,
                 slit_width: float | None,
                 spatial_binning: float | None,
                 spectral_binning: float | None) -> dict:
@@ -125,7 +130,10 @@ def _get_header(file_path: Path, slit_length: float | None,
         }
 
 
-def _determine_gains(gain: str):
+def _determine_gains(gain: str) -> list[float]:
+    """
+    Get list of gain values [e⁻/DN] for low or high gain.
+    """
     if gain == 'low':
         gains = low_gain
     elif gain == 'high':
@@ -137,7 +145,8 @@ def _determine_gains(gain: str):
     return gains
 
 
-def _get_image_data(file_path: Path, gain: str or None) -> u.Quantity:
+def _get_image_data(file_path: Path,
+                    gain: str or None) -> u.Quantity:
     """
     Combine mosaic image data into a single array with proper inter-detector
     spacing, and multiply each detector image by its corresponding gain so they
@@ -195,11 +204,14 @@ def _get_image_data(file_path: Path, gain: str or None) -> u.Quantity:
     return data_image * u.electron
 
 
-def _get_images_from_directory(
-        directory: Path, slit_length: float, slit_width: float,
-        spatial_binning: float, spectral_binning: float,
-        gain: str, remove_cosmic_rays: bool,
-        log_path: Path) -> list[CCDData]:
+def _get_images_from_directory(directory: Path,
+                               slit_length: float,
+                               slit_width: float,
+                               spatial_binning: float,
+                               spectral_binning: float,
+                               gain: str,
+                               remove_cosmic_rays: bool,
+                               log_path: Path) -> list[CCDData]:
     """
     Make a list of CCDData objects of combined mosaic data.
     """
@@ -280,9 +292,12 @@ def _make_median_flux(flux_images: list[CCDData]) -> CCDData:
 
 
 def _make_master_bias(file_directory: Path,
-                      slit_length: float, slit_width: float,
-                      spatial_binning: float, spectral_binning: float,
-                      gain: str, log_path: Path) -> CCDData:
+                      slit_length: float,
+                      slit_width: float,
+                      spatial_binning: float,
+                      spectral_binning: float,
+                      gain: str,
+                      log_path: Path) -> CCDData:
     """
     Wrapper function to make a master bias detector image.
     """
@@ -298,11 +313,15 @@ def _make_master_bias(file_directory: Path,
     return master_bias
 
 
-def _make_master_flux(file_directory: Path, flux_type: str,
+def _make_master_flux(file_directory: Path,
+                      flux_type: str,
                       master_bias: CCDData,
-                      slit_length: float, slit_width: float,
-                      spatial_binning: float, spectral_binning: float,
-                      gain: str, log_path: Path) -> CCDData:
+                      slit_length: float,
+                      slit_width: float,
+                      spatial_binning: float,
+                      spectral_binning: float,
+                      gain: str,
+                      log_path: Path) -> CCDData:
     """
     Wrapper function to make a master flat or arc detector image.
     """
@@ -320,10 +339,14 @@ def _make_master_flux(file_directory: Path, flux_type: str,
     return master_flux
 
 
-def _make_master_trace(file_directory: Path, master_bias: CCDData,
-                       slit_length: float, slit_width: float,
-                       spatial_binning: float, spectral_binning: float,
-                       gain: str, log_path: Path) -> CCDData:
+def _make_master_trace(file_directory: Path,
+                       master_bias: CCDData,
+                       slit_length: float,
+                       slit_width: float,
+                       spatial_binning: float,
+                       spectral_binning: float,
+                       gain: str,
+                       log_path: Path) -> CCDData:
     """
     Wrapper function to load the first trace file and make a master order trace
     image.
@@ -340,14 +363,18 @@ def _make_master_trace(file_directory: Path, master_bias: CCDData,
     return master_trace
 
 
-def _process_science_data(
-        file_directory: Path, sub_directory: str,
-        master_bias: CCDData, master_flat: CCDData,
-        order_bounds: _OrderBounds,
-        wavelength_solution: _WavelengthSolution,
-        slit_length: float, slit_width: float,
-        spatial_binning: float, spectral_binning: float,
-        gain: str, log_path: Path) -> ([CCDData], [str]):
+def _process_science_data(file_directory: Path,
+                          sub_directory: str,
+                          master_bias: CCDData,
+                          master_flat: CCDData,
+                          order_bounds: _OrderBounds,
+                          wavelength_solution: _WavelengthSolution,
+                          slit_length: float,
+                          slit_width: float,
+                          spatial_binning: float,
+                          spectral_binning: float,
+                          gain: str,
+                          log_path: Path) -> ([CCDData], [str]):
     """
     Wrapper function to apply all of the reduction steps to science data in a
     supplied directory.

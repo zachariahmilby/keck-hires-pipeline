@@ -9,9 +9,8 @@ from astropy.io import fits
 from astropy.time import Time
 from tqdm import tqdm
 
-from hirespipeline.graphics import flux_cmap, _parse_mosaic_detector_slice, \
-    rcparams, calculate_norm
-
+from hirespipeline.graphics import (flux_cmap, _parse_mosaic_detector_slice,
+                                    rcparams, calculate_norm)
 
 _csv_keys = ['Filename',
              'Observation Date',
@@ -30,14 +29,14 @@ _csv_keys = ['Filename',
              'Cross Disperser Angle [deg]']
 
 
-def check_if_directory_exists(directory: Path):
+def check_if_directory_exists(directory: Path) -> Path:
     if not directory.absolute().exists():
         raise OSError('Provided directory does not exist.')
     else:
         return directory.absolute()
 
 
-def make_directory(directory: Path):
+def make_directory(directory: Path) -> Path:
     if not directory.exists():
         directory.mkdir(parents=True)
     return directory
@@ -47,7 +46,9 @@ class _Files:
     """
     Object to hold FITS file paths and ensure that a directory exists.
     """
-    def __init__(self, directory: Path, file_type: str = 'fits'):
+    def __init__(self,
+                 directory: Path,
+                 file_type: str = 'fits'):
         self._directory = check_if_directory_exists(directory)
         self._file_type = file_type
 
@@ -63,7 +64,8 @@ class _FilesQuicklook:
     overview of the data in each of the observation night directories.
     """
 
-    def __init__(self, directory: str or Path):
+    def __init__(self,
+                 directory: str or Path):
         """
         Parameters
         ----------
@@ -73,7 +75,8 @@ class _FilesQuicklook:
         self._directory = check_if_directory_exists(Path(directory))
 
     @staticmethod
-    def _make_info_text_block(hdul: fits.HDUList, filename: str):
+    def _make_info_text_block(hdul: fits.HDUList,
+                              filename: str) -> tuple[str, str]:
         """
         Make strings of ancillary information for the graphic.
         """
@@ -108,7 +111,9 @@ class _FilesQuicklook:
 
         return left_column, right_column
 
-    def _save_quicklook(self, hdul: fits.HDUList, filename: str):
+    def _save_quicklook(self,
+                        hdul: fits.HDUList,
+                        filename: str) -> None:
         """
         Save graphic quicklook to file.
         """
@@ -148,7 +153,9 @@ class _FilesQuicklook:
             plt.close(fig)
 
     @staticmethod
-    def _append_csv(df: pd.DataFrame, hdul: fits.HDUList, filename: str):
+    def _append_csv(df: pd.DataFrame,
+                    hdul: fits.HDUList,
+                    filename: str) -> pd.DataFrame:
         header = hdul[0].header
         datetime = Time(header['DATE_BEG'], format='isot', scale='utc').fits
         data = {'Filename': filename,
@@ -169,7 +176,11 @@ class _FilesQuicklook:
                 }
         return pd.concat([df, pd.DataFrame([data])], ignore_index=True)
 
-    def run(self, save_graphics: bool = True):
+    def run(self,
+            save_graphics: bool = True) -> None:
+        """
+        Wrapper method to generate quicklooks.
+        """
         files = sorted(self._directory.glob('*.fits'))
         files_zipped = sorted(self._directory.glob('*.fits.gz'))
         if (len(files) == 0) & (len(files_zipped) == 0):
@@ -188,7 +199,8 @@ class _FilesQuicklook:
         df.to_csv(savepath, index=False)
 
 
-def create_quicklooks(directory: str or Path, save_graphics: bool = True):
+def create_quicklooks(directory: str or Path,
+                      save_graphics: bool = True) -> None:
     """
     Wrapper function to create quicklooks in a directory containing FITS files.
 

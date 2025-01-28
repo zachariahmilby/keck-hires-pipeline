@@ -15,20 +15,20 @@ def _load_extinction_data() -> dict:
                     'mauna_kea_airmass_extinction.dat')
     wavelength, factor = np.genfromtxt(ext_path, unpack=True,
                                        skip_header=True, delimiter=' ')
-    return {
-        'wavelength': wavelength,
-        'factor': factor
-    }
+    return {'wavelength': wavelength,
+            'factor': factor}
 
 
-def _extinction_correction(airmass: float, wavelengths: np.ndarray,
-                           rectified_data: np.ndarray):
+def _extinction_correction(airmass: float,
+                           wavelengths: np.ndarray,
+                           rectified_data: np.ndarray) -> np.ndarray:
     """
     Apply airmass-extinction correction.
     """
     extinction_data = _load_extinction_data()
     extinction_corrected_data = np.zeros_like(rectified_data)
-    for order, data in enumerate(rectified_data):
+    for (order, data) in enumerate(rectified_data):
+        data = np.asarray(data)
         interp_extinction = np.interp(
             wavelengths[order], extinction_data['wavelength'],
             extinction_data['factor'])

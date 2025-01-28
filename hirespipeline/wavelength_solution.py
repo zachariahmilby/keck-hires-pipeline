@@ -25,9 +25,26 @@ from hirespipeline.order_tracing import _OrderBounds
 
 
 class _WavelengthSolution:
-
-    def __init__(self, master_arc: CCDData, master_flat: CCDData,
-                 order_bounds: _OrderBounds, log_path: Path):
+    """
+    (Attempt to) calculate wavelength solutions for each identified order.
+    """
+    def __init__(self,
+                 master_arc: CCDData,
+                 master_flat: CCDData,
+                 order_bounds: _OrderBounds,
+                 log_path: Path):
+        """
+        Parameters
+        ----------
+        master_arc: CCDData
+            Master arc image.
+        master_flat: CCDData
+            Master flat image.
+        order_bounds: _OrderBounds
+            Order bounds.
+        log_path: Path
+            Location of log file.
+        """
         self._master_arc = master_arc
         self._master_flat = master_flat
         self._order_bounds = order_bounds
@@ -45,12 +62,15 @@ class _WavelengthSolution:
         self._wavelength_solution = self._calculate_optimal_solution()
         self._complete_solution()
 
-    def _get_slit_width(self):
-        slit_width = (self._master_arc.header['slit_width']
-                      / self._master_arc.header['spectral_bin_scale'])
-        return slit_width
+    def _get_slit_width(self) -> float:
+        """
+        Get width of slit in pixels.
+        """
+        width = self._master_arc.header['slit_width']
+        scale = self._master_arc.header['spectral_bin_scale']
+        return width / scale
 
-    def _make_1d_spectra(self):
+    def _make_1d_spectra(self) -> np.ndarray:
         """
         Make spatial averages of each spectrum to collapse them to one
         dimension. Also normalize them. To account for overlapping orders, I am
@@ -70,17 +90,23 @@ class _WavelengthSolution:
         return spectra
 
     @staticmethod
-    def _load_templates(cross_disperser: str, detector_layout: str):
+    def _load_templates(cross_disperser: str,
+                        detector_layout: str):
+        """
+        Load arc templates for a specific cross disperser and detector layout
+        (mosaic or legacy).
+        """
         template_filepath = Path(
             package_directory, 'anc',
             f'{detector_layout}_arc_templates_{cross_disperser}.pickle')
         return pickle.load(open(template_filepath, 'rb'))
 
     @staticmethod
-    def _find_shortest_angle_distances(
-            echelle_angle: float, echelle_angles: np.ndarray,
-            cross_disperser_angle: float,
-            cross_disperser_angles: np.ndarray) -> np.ndarray:
+    def _find_shortest_angle_distances(echelle_angle: float,
+                                       echelle_angles: np.ndarray,
+                                       cross_disperser_angle: float,
+                                       cross_disperser_angles: np.ndarray
+                                       ) -> np.ndarray:
         """
         Return the indices of templates sorted by how close they are to the
         given echelle/cross-disperser angle pairs.
@@ -112,9 +138,10 @@ class _WavelengthSolution:
         sorted_templates = [templates[ind] for ind in inds]
         return sorted_templates
 
-    def _emission_line_model(
-            self, center, amplitude,
-            prefix: str = '') -> (CompositeModel, Parameters):
+    def _emission_line_model(self,
+                             center: int | float,
+                             amplitude: int | float,
+                             prefix: str = '') -> (CompositeModel, Parameters):
         """
         Model emission line as a rectangle function the width of the slit.
         """
@@ -133,7 +160,8 @@ class _WavelengthSolution:
         params.add(f'{prefix}_sigma2', expr=f'{prefix}_sigma1')
         return model, params
 
-    def _make_emission_line(self, center: int | float,
+    def _make_emission_line(self,
+                            center: int | float,
                             amplitude: int | float) -> np.array:
         """
         Make a normalized Gaussian emission line at a given pixel position with
@@ -145,21 +173,33 @@ class _WavelengthSolution:
             center=center, amplitude=amplitude)
         return model.eval(x=self._pixels, params=params)
 
-    def _make_1d_template_spectrum(self, line_centers):
+    def _make_1d_template_spectrum(self,
+                                   line_centers) -> np.array:
+        """
+        Generate normalized one-dimensional template spectrum.
+        """
         try:
             return minmax_scale(np.sum([self._make_emission_line(line, 1.0)
                                         for line in line_centers], axis=0))
         except TypeError:
             return np.zeros(self._pixels.shape)
 
-    def _make_template_spectra(self, template):
+    def _make_template_spectra(self,
+                               template) -> np.ndarray:
+        """
+        Make stack of normalized template spectra for each order.
+        """
         artificial_arc_spectrum = np.zeros(
             (len(template['orders']), self._pixels.shape[0]))
         for i, p in enumerate(template['line_centers']):
             artificial_arc_spectrum[i] = self._make_1d_template_spectrum(p)
         return artificial_arc_spectrum
 
-    def _cross_correlate_template(self, template):
+    def _cross_correlate_template(self,
+                                  template) -> tuple[np.ndarray, int]:
+        """
+        Cross-correlate template spectra with observed arc lamp spectra.
+        """
         template_spectra = self._make_template_spectra(template)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -171,19 +211,21 @@ class _WavelengthSolution:
         spectral_offset = int(np.round(template_spectra.shape[1] / 2 - ind[1]))
         order0 = template['orders'][0] - spatial_offset
         orders = np.arange(order0, order0 - self._1d_arc_spectra.shape[0], -1)
-
         return orders, spectral_offset
 
-    def _get_order_numbers(self):
+    def _get_order_numbers(self) -> np.ndarray:
+        """
+        Get order numbers identified using the cross-correlation algorithm.
+        """
         _log(self._log_path, '      Determining order numbers...')
         template = self._get_sorted_solution_templates()[0]
         order_numbers, _ = self._cross_correlate_template(template)
         return order_numbers
 
     @staticmethod
-    def _fill_missing_orders(
-            data, interp_model: PolynomialModel,
-            mask_boundaries: bool = True) -> np.ndarray:
+    def _fill_missing_orders(data,
+                             interp_model: PolynomialModel,
+                             mask_boundaries: bool = True) -> np.ndarray:
         """
         Interpolate solution from adjacent orders to fill in missing orders.
         """
@@ -203,6 +245,9 @@ class _WavelengthSolution:
 
     @staticmethod
     def _identify_ion(wavelength) -> str:
+        """
+        Identify ion from templates using wavelength.
+        """
         df = pd.read_csv(Path(package_directory, 'anc', 'ThAr_line_list.dat'),
                          sep=' ', names=['wavelength', 'ion'])
         known_lines = vac_to_air(
@@ -212,12 +257,22 @@ class _WavelengthSolution:
         return known_ions[ind]
 
     def _make_order_lists(self) -> list[list]:
+        """
+        Make a list of empty lists, one for each order.
+        """
         data = []
         for _ in self._order_numbers:
             data.append([])
         return data
 
-    def _find_sets(self, template_centers, template_wavelengths):
+    def _find_sets(self,
+                   template_centers,
+                   template_wavelengths
+                   ) -> tuple[list[np.ndarray], list[np.ndarray]]:
+        """
+        Find 'sets' of wavelengths, where one set could include many blended
+        lines.
+        """
         threshold = int(5 * self._slit_width)
         positions = np.where(
             np.diff(template_centers) > threshold)[0] + 1
@@ -225,9 +280,15 @@ class _WavelengthSolution:
         wavelengths_set = np.split(template_wavelengths, positions)
         return centers_set, wavelengths_set
 
-    def _fit_sets(self, centers_set, wavelengths_set, arc_spectrum,
-                  template_spectrum, dx: int = 2.5):
-
+    def _fit_sets(self,
+                  centers_set,
+                  wavelengths_set,
+                  arc_spectrum,
+                  template_spectrum,
+                  dx: int = 2.5) -> tuple[list[float], list[float], list[str]]:
+        """
+        Fit individual components within each set.
+        """
         dx = int(dx * self._slit_width)
 
         centers = []
@@ -291,8 +352,14 @@ class _WavelengthSolution:
                    centers,
                    wavelengths,
                    ions,
-                   n_attempts: int = 10):
-
+                   n_attempts: int = 10) -> tuple[np.ndarray, np.ndarray,
+                                                  np.ndarray, np.ndarray,
+                                                  np.ndarray, np.ndarray,
+                                                  bool]:
+        """
+        Calculate wavelength solution for an individual order by fitting a
+        polynomial.
+        """
         solution_model = PolynomialModel(degree=3)
         n_pixels = self._pixels.size
 
@@ -363,7 +430,7 @@ class _WavelengthSolution:
         return empty
 
     # noinspection DuplicatedCode
-    def _calculate_optimal_solution(self):
+    def _calculate_optimal_solution(self) -> dict:
         """
         Loop through all the templates and determine which one contains the
         most identified lines for each order.
@@ -381,10 +448,10 @@ class _WavelengthSolution:
 
         solutions = {}
         for order in self._order_numbers:
-            solutions[f'order{order}'] = {'used_pixels': [],
-                                          'used_wavelengths': [],
-                                          'used_ions': [],
-                                          'residual': []}
+            solutions[f'order{order}'] = {'used_pixels': np.array([]),
+                                          'used_wavelengths': np.array([]),
+                                          'used_ions': np.array([]),
+                                          'residual': np.array([])}
 
         for n, template in enumerate(templates):
 
@@ -458,6 +525,10 @@ class _WavelengthSolution:
         return solution
 
     def _complete_solution(self) -> None:
+        """
+        Calculate full wavelength solution for all orders by fitting a 2D
+        surface.
+        """
         pixel_centers, orders_centers = np.meshgrid(self._pixels,
                                                     self._order_numbers)
         pixel_edges, orders_edges = np.meshgrid(
@@ -483,9 +554,13 @@ class _WavelengthSolution:
             warnings.filterwarnings('ignore',
                                     message='Model is linear in parameters',
                                     category=AstropyUserWarning)
-            fit_centers = fitter(model, pixel_centers[ind],
-                                 orders_centers[ind], solution_centers[ind])
-            fit_edges = fitter(model, pixel_edges[ind], orders_edges[ind],
+            fit_centers = fitter(model,
+                                 pixel_centers[ind],  # noqa
+                                 orders_centers[ind],  # noqa
+                                 solution_centers[ind])
+            fit_edges = fitter(model,
+                               pixel_edges[ind],  # noqa
+                               orders_edges[ind],  # noqa
                                solution_edges[ind])
 
         solution_centers = fit_centers(pixel_centers, orders_centers)
@@ -501,10 +576,16 @@ class _WavelengthSolution:
 
     @staticmethod
     def _latexify_ions(ions) -> list[str]:
+        """
+        Add a space after atom abbreviation.
+        """
         return [i.replace('Th', 'Th ').replace('Ar', 'Ar ') for i in ions]
 
     # noinspection DuplicatedCode
     def quality_assurance(self, file_path: Path):
+        """
+        Generate a quality assurance graphic for a wavelength solution fit.
+        """
         with plt.style.context(rcparams):
             for i, order in enumerate(self._order_numbers):
                 fig, axes = plt.subplots(
@@ -578,12 +659,21 @@ class _WavelengthSolution:
 
     @property
     def order_numbers(self) -> np.ndarray:
+        """
+        Order number for each order identified in the detector image.
+        """
         return self._order_numbers
 
     @property
     def centers(self) -> np.ndarray:
+        """
+        Best-fit pixel center wavelengths.
+        """
         return self._wavelength_solution['fit_centers']
 
     @property
     def edges(self) -> np.ndarray:
+        """
+        Best-fit pixel edge wavelengths.
+        """
         return self._wavelength_solution['fit_edges']

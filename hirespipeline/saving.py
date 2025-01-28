@@ -7,26 +7,41 @@ from astropy.io import fits
 from hirespipeline.files import make_directory
 
 
-def fix_nonprimary_header_2d(header: fits.Header, unit: str):
+def fix_nonprimary_header_2d(header: fits.Header,
+                             unit: str) -> None:
+    """
+    Add description to data axes and data units to FITS header.
+    """
     header['NAXIS1'] = (header['NAXIS1'], 'number of spectral bins')
     header['NAXIS2'] = (header['NAXIS2'], 'number of spatial bins')
     header['NAXIS3'] = (header['NAXIS3'], 'number of echelle orders')
     header.append(('BUNIT', f'{unit}', 'data physical units'))
 
 
-def fix_nonprimary_header_1d(header: fits.Header, unit: str):
+def fix_nonprimary_header_1d(header: fits.Header,
+                             unit: str) -> None:
+    """
+    Add description to data axes and data units to FITS header.
+    """
     header['NAXIS1'] = (header['NAXIS1'], 'number of spectral bin centers')
     header['NAXIS2'] = (header['NAXIS2'], 'number of echelle orders')
     header.append(('BUNIT', f'{unit}', 'data physical units'))
 
 
 # noinspection PyTypeChecker, DuplicatedCode
-def _save_as_fits(data_header: dict, data: np.ndarray, uncertainty: np.ndarray,
-                  unit: str or None, data_type: str, savepath: Path,
+def _save_as_fits(data_header: dict,
+                  data: np.ndarray,
+                  uncertainty: np.ndarray,
+                  unit: str or None,
+                  data_type: str,
+                  savepath: Path,
                   target: str = None,
                   wavelength_centers: np.ndarray = None,
                   wavelength_edges: np.ndarray = None,
-                  order_numbers: np.ndarray = None):
+                  order_numbers: np.ndarray = None) -> None:
+    """
+    Save data to FITS file with appropriate headers.
+    """
     with warnings.catch_warnings():
         warnings.simplefilter('ignore', category=fits.verify.VerifyWarning)
 

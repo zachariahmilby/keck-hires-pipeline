@@ -21,17 +21,28 @@ naif_codes = {'Jupiter': '599', 'Io': '501', 'Europa': '502',
               'Ganymede': '503', 'Callisto': '504', 'Maunakea': '568'}
 
 
-def _make_log(path: Path):
+def _make_log(path: Path) -> None:
+    """
+    Create a blank log file.
+    """
     with open(Path(path, 'log.txt'), 'w') as _:
         pass
 
 
-def _write_log(path: Path, string: str):
+def _write_log(path: Path,
+               string: str) -> None:
+    """
+    Write a string to a log file.
+    """
     with open(Path(path, 'log.txt'), 'a') as file:
         file.write(string + '\n')
 
 
-def _log(path, string, silent: bool = False):
+def _log(path, string,
+         silent: bool = False) -> None:
+    """
+    Wrapper function to log a string and optionally print it in the terminal.
+    """
     _write_log(path, string)
     if not silent:
         print(string)
@@ -39,19 +50,21 @@ def _log(path, string, silent: bool = False):
 
 def air_to_vac(wavelength: u.Quantity) -> u.Quantity:
     """
-    Implements the air to vacuum wavelength conversion described in eqn 65 of
-    Griesen 2006. Taken from `specutils`.
+    Implements the air-to-vacuum wavelength conversion described in
+    equation (65) of Griesen et al. (2006), doi:10.1051/0004-6361:20053818.
+    Copied from the implementation in `specutils`.
     """
     wlum = wavelength.to(u.um).value
-    return (1+1e-6*(287.6155+1.62887/wlum**2+0.01360/wlum**4)) * wavelength
+    n = (1 + 1e-6 * (287.6155 + 1.62887/wlum**2 + 0.01360/wlum**4))
+    return n * wavelength
 
 
 def vac_to_air(wavelength: u.Quantity) -> u.Quantity:
     """
-    Griesen 2006 reports that the error in naively inverting Eqn 65 is less
-    than 10^-9 and therefore acceptable.  This is therefore eqn 67. Taken from
-    `specutils'.
+    Implements the vacuum-to-air wavelength conversion described in
+    equation (67) of Griesen et al. (2006), doi:10.1051/0004-6361:20053818.
+    Copied from the implementation in `specutils`.
     """
     wlum = wavelength.to(u.um).value
-    nl = (1+1e-6*(287.6155+1.62887/wlum**2+0.01360/wlum**4))
-    return wavelength/nl
+    n = (1 + 1e-6 * (287.6155 + 1.62887/wlum**2 + 0.01360/wlum**4))
+    return wavelength / n

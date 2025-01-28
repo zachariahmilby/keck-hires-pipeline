@@ -13,7 +13,7 @@ rcparams = Path(package_directory, 'anc', 'rcparams.mplstyle')
 nan_color = (0.75, 0.75, 0.75)
 
 
-def turn_off_axes(axis: plt.Axes):
+def turn_off_axes(axis: plt.Axes) -> None:
     """
     Turn off ticks and tick numbers.
     """
@@ -22,45 +22,49 @@ def turn_off_axes(axis: plt.Axes):
     axis.set_yticks([])
 
 
-def calculate_norm(data: np.ndarray, percentile=99):
+def calculate_norm(data: np.ndarray,
+                   percentile: int | float = 99.0) -> colors.Normalize:
     """
-    Calculate a 99th-percentile linear normalization.
+    Calculate a nth-percentile linear normalization.
     """
     tempdata = data.copy().flatten()
     tempdata = tempdata[np.where(tempdata > 0)]
-    vmin = np.nanpercentile(tempdata, 100-percentile)
-    vmax = np.nanpercentile(tempdata, percentile)
+    vmin = np.nanpercentile(tempdata, 100-percentile).astype(float)
+    vmax = np.nanpercentile(tempdata, percentile).astype(float)
     return colors.Normalize(vmin=vmin, vmax=vmax)
 
 
-def _get_cmap(name: str):
+def _get_cmap(name: str) -> colors.Colormap:
+    """
+    Get a Matplotlib colormap and set the nan color.
+    """
     cmap = plt.get_cmap(name).copy()
     cmap.set_bad(nan_color)
     return cmap
 
 
-def bias_cmap():
+def bias_cmap() -> colors.Colormap:
     """
     Colormap "cividis" for displaying bias data.
     """
     return _get_cmap('cividis')
 
 
-def arc_cmap():
+def arc_cmap() -> colors.Colormap:
     """
     Colormap "inferno" for displaying bias data.
     """
     return _get_cmap('inferno')
 
 
-def flux_cmap():
+def flux_cmap() -> colors.Colormap:
     """
     Colormap "viridis" for displaying flux data.
     """
     return _get_cmap('viridis')
 
 
-def flat_cmap():
+def flat_cmap() -> colors.Colormap:
     """
     Colormap "bone" for displaying flatfield data.
     """
@@ -68,12 +72,16 @@ def flat_cmap():
 
 
 def _parse_legacy_detector_slice(header: fits.Header) -> np.s_:
+    """"
+    Extract the Python slice which trims detector edges in the spatial
+    dimension for legacy data.
+    """
     slice0 = header['PREPIX']
     slice1 = header['NAXIS1'] - header['POSTPIX']
     return np.s_[:, slice0:slice1]
 
 
-def _parse_mosaic_detector_slice(slice_string: str) -> tuple[slice, slice]:
+def _parse_mosaic_detector_slice(slice_string: str) -> np.s_:
     """
     Extract the Python slice which trims detector edges in the spatial
     dimension for mosaic data.
@@ -82,8 +90,6 @@ def _parse_mosaic_detector_slice(slice_string: str) -> tuple[slice, slice]:
                        .replace(']', '').split(',')).astype(int)
     indices[[0, 2]] -= 1
     return np.s_[indices[0]:indices[1], indices[2]:indices[3]]
-    # return slice(indices[0], indices[1], 1), slice(indices[2], indices[3],
-    #                                                1)
 
 
 def _get_mosaic_detector_corner_coordinates(

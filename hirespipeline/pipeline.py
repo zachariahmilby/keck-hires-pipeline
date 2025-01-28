@@ -13,29 +13,41 @@ from astroquery.jplhorizons import Horizons
 
 from hirespipeline.files import make_directory
 from hirespipeline.general import naif_codes, _log, _make_log
-from hirespipeline.graphics import rcparams, turn_off_axes, calculate_norm, \
-    bias_cmap, flux_cmap, nan_color
-from hirespipeline.image_processing import _make_master_bias, \
-    _make_master_flux, _make_master_trace, _process_science_data
+from hirespipeline.graphics import (rcparams, turn_off_axes, calculate_norm,
+                                    bias_cmap, flux_cmap, nan_color)
+from hirespipeline.image_processing import (_make_master_bias,
+                                            _make_master_flux,
+                                            _make_master_trace,
+                                            _process_science_data)
 from hirespipeline.order_tracing import _OrderTraces, _OrderBounds
 from hirespipeline.saving import _save_as_fits
 from hirespipeline.wavelength_solution import _WavelengthSolution
 
 
-def stack_orders(rectified_data: np.ndarray, dy=3):
+def stack_orders(rectified_data: np.ndarray,
+                 dy=3) -> np.ndarray:
+    """
+    Stack individual order arrays into a single array.
+    """
     n_orders, n_spa, n_spe = rectified_data.shape
     stacked_data = np.full(
         (int(n_orders * n_spa + (n_orders - 1) * dy), n_spe),
         fill_value=np.nan)
     for i in range(n_orders):
-        stacked_data[i*(n_spa + dy):i*(n_spa + dy)+n_spa] = rectified_data[i]
+        s_ = np.s_[i*(n_spa+dy):i*(n_spa+dy)+n_spa]
+        stacked_data[s_] = rectified_data[i]
     stacked_data[np.where(np.isnan(stacked_data))] = np.nan
     return stacked_data
 
 
 # noinspection DuplicatedCode
 def _calibration_qa_graphic(rectified_data: CCDData,
-                            cmap: colors.Colormap, savename: Path):
+                            cmap: colors.Colormap,
+                            savename: Path) -> None:
+    """
+    Generate a quality assurance graphic for calibration data like bias, arc
+    or flats displaying data and uncertainty in physical units.
+    """
     with plt.style.context(rcparams):
         fig, axes = plt.subplots(1, 2, figsize=(8, 4),
                                  constrained_layout=True, sharex='all',
@@ -60,7 +72,12 @@ def _calibration_qa_graphic(rectified_data: CCDData,
 
 # noinspection DuplicatedCode
 def _science_qa_graphic(rectified_data: CCDData,
-                        cmap: colors.Colormap, savename: Path):
+                        cmap: colors.Colormap,
+                        savename: Path) -> None:
+    """
+    Generate a quality assurance graphic for science data displaying data and
+    uncertainty in physical units.
+    """
     with plt.style.context(rcparams):
         fig, axes = plt.subplots(1, 3, figsize=(12, 4),
                                  constrained_layout=True, sharex='all',
@@ -94,15 +111,19 @@ def _science_qa_graphic(rectified_data: CCDData,
 
 
 class HIRESPipeline:
-
-    def __init__(self, target: str or list[str], file_directory: str or Path,
+    """
+    HIRES data reduction pipeline.
+    """
+    def __init__(self,
+                 target: str or list[str],
+                 file_directory: str or Path,
                  science_subdirectory: str or [str] = 'science',
                  slit_length: int | float = None,
-                 slit_width: int | float = None, spatial_binning: int = None,
-                 spectral_binning: int = None, gain: str = None):
+                 slit_width: int | float = None,
+                 spatial_binning: int = None,
+                 spectral_binning: int = None,
+                 gain: str = None):
         """
-        Use this class to run the pipeline.
-
         Parameters
         ----------
         target: str or list(str)
@@ -159,7 +180,7 @@ class HIRESPipeline:
         _log(self._save_directory, string)
 
     @staticmethod
-    def _determine_input_type(science_subdirectory):
+    def _determine_input_type(science_subdirectory) -> list[str]:
         """
         Determines if you entered a single string for the subdirectory/target
         or a list of strings for multiple science subdirectories/targets.
@@ -174,14 +195,22 @@ class HIRESPipeline:
             raise Exception('Improper science subdirectory input type. Must be'
                             ' a string or a list of strings.')
 
-    def _check_inputs(self):
+    def _check_inputs(self) -> None:
+        """
+        Check if the number of subdirectories matches the number of targets.
+        """
         if len(self._target) != len(self._science_subdirectory):
             raise Exception(f"Targets must match length of subdirectories. "
                             f"You've specified {self._target} for targets but "
                             f"{self._science_subdirectory} as subdirectories.")
 
     @staticmethod
-    def _find_closest_target(targets: [str], header: dict):
+    def _find_closest_target(targets: [str],
+                             header: dict) -> np.ndarray:
+        """
+        Find Solar System target closest to telescope RA/Dec. Currently limited
+        to just Jupiter and its Galilean satellites.
+        """
         distances = []
         ref_coord = SkyCoord(ra=Angle(header['ra'], unit=u.hour),
                              dec=Angle(header['dec'], unit=u.degree))
@@ -198,17 +227,26 @@ class HIRESPipeline:
         return np.asarray(targets)[closest]
 
     @staticmethod
-    def _save_master_calibration_file(
-            ccd_data: CCDData, order_numbers: np.ndarray, data_type: str,
-            savepath: str or Path):
+    def _save_master_calibration_file(ccd_data: CCDData,
+                                      order_numbers: np.ndarray,
+                                      data_type: str,
+                                      savepath: str or Path) -> None:
+        """
+        Save a master calibration FITS file.
+        """
         _save_as_fits(data_header=ccd_data.header, data=ccd_data.data,
                       uncertainty=ccd_data.uncertainty.array,
                       unit=ccd_data.unit, data_type=data_type,
                       order_numbers=order_numbers, savepath=savepath)
 
-    def _save_science_file(self, reduced_data: CCDData, target: str or [str],
+    def _save_science_file(self,
+                           reduced_data: CCDData,
+                           target: str or [str],
                            wavelength_solution: _WavelengthSolution,
-                           savepath: str or Path):
+                           savepath: str or Path) -> None:
+        """
+        Save a science FITS file.
+        """
         if isinstance(target, list):
             target = self._find_closest_target(target, reduced_data.header)
         _save_as_fits(data_header=reduced_data.header, data=reduced_data.data,
@@ -221,11 +259,17 @@ class HIRESPipeline:
                       savepath=savepath)
 
     @staticmethod
-    def _reduced_filename(original_filename: str):
+    def _reduced_filename(original_filename: str) -> str:
+        """
+        Append '_reduced' to the end of a FITS filename.
+        """
         return original_filename.replace('.fits', '_reduced.fits')
 
     # noinspection DuplicatedCode
-    def run(self, save_graphics: bool = True, test_trace: bool = False):
+    def run(self,
+            save_graphics: bool = True,
+            test_trace: bool = False,
+            optimize_traces: bool = True):
         """
         Run the HIRES pipeline.
 
@@ -243,10 +287,14 @@ class HIRESPipeline:
             If you want to run the pipeline just far enough to test the order
             detection algorithm, set this to True. Mostly useful for my own
             debugging purposes.
+        optimize_traces : bool
+            Whether or not you want to optimize the traces. Setting to False
+            improves speed and may prevent bad traces near detector edges.
         """
         t0 = datetime.now(timezone.utc)
         print('')
-        self.log(f"{datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S.%f')}")
+        fmt = '%Y-%m-%d %H:%M:%S.%f'
+        self.log(f"{datetime.now(timezone.utc).strftime(fmt)}")
         self.log(f'Running HIRES data reduction pipeline on directory '
                  f'"{str(self._file_directory)}"')
 
@@ -292,7 +340,8 @@ class HIRESPipeline:
             gain=self._gain, log_path=self._save_directory)
         self.log('   Tracing echelle orders...')
         order_traces = _OrderTraces(master_trace=master_trace,
-                                    log_path=self._save_directory)
+                                    log_path=self._save_directory,
+                                    optimize=optimize_traces)
         order_traces.quality_assurance(Path(self._save_directory))
 
         if not test_trace:
