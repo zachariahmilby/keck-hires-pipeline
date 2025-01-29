@@ -219,7 +219,7 @@ def _get_images_from_directory(directory: Path,
     n = len(files)
     images = []
     for i, file in enumerate(files):
-        _log(log_path, f'         {i + 1}/{n}: {file.name}')
+        _log(log_path, f'         {i + 1}/{n}: {file.name}', new_line=False)
         header = _get_header(file, slit_length=slit_length,
                              slit_width=slit_width,
                              spatial_binning=spatial_binning,
@@ -374,6 +374,7 @@ def _process_science_data(file_directory: Path,
                           spatial_binning: float,
                           spectral_binning: float,
                           gain: str,
+                          extinction_correct: bool,
                           log_path: Path) -> ([CCDData], [str]):
     """
     Wrapper function to apply all of the reduction steps to science data in a
@@ -382,16 +383,20 @@ def _process_science_data(file_directory: Path,
     _log(log_path, f'      Loading data and removing cosmic rays...')
     science_images = _get_images_from_directory(
         Path(file_directory, sub_directory),
-        slit_length=slit_length, slit_width=slit_width,
-        spatial_binning=spatial_binning, spectral_binning=spectral_binning,
-        gain=gain, remove_cosmic_rays=True, log_path=log_path)
+        slit_length=slit_length,
+        slit_width=slit_width,
+        spatial_binning=spatial_binning,
+        spectral_binning=spectral_binning,
+        gain=gain,
+        remove_cosmic_rays=True,
+        log_path=log_path)
     count = len(science_images)
     reduced_science_images = []
     filenames = []
     _log(log_path, '      Reducing data...')
     for i, ccd_image in enumerate(science_images):
         filename = ccd_image.header['file_name']
-        _log(log_path, f'         {i + 1}/{count}: {filename}')
+        _log(log_path, f'         {i + 1}/{count}: {filename}', new_line=False)
         rectified_data = order_bounds.rectify(ccd_data=ccd_image)
         bias_subtracted_data = ccdproc.subtract_bias(
             rectified_data, master=master_bias)
@@ -403,16 +408,20 @@ def _process_science_data(file_directory: Path,
             flux_data = flat_corrected_data.divide(
                 flat_corrected_data.header['exposure_time'] * u.second)
             flux_data.header = flat_corrected_data.header.copy()
-            extinction_corrected_data = _extinction_correct(
-                rectified_data=flux_data,
-                wavelength_solution=wavelength_solution)
-            data = extinction_corrected_data.data
-            uncertainty = extinction_corrected_data.uncertainty.array
+            if extinction_correct:
+                extinction_corrected_data = _extinction_correct(
+                    rectified_data=flux_data,
+                    wavelength_solution=wavelength_solution)
+                data = extinction_corrected_data.data
+                uncertainty = extinction_corrected_data.uncertainty.array
+            else:
+                data = flux_data.data
+                uncertainty = flux_data.uncertainty.array
             ind = np.isnan(data)
             data[ind] = 0
             uncertainty[ind] = 0
-            extinction_corrected_data.data = data
-            extinction_corrected_data.uncertainty.array = uncertainty
-            reduced_science_images.append(extinction_corrected_data)
+            flux_data.data = data
+            flux_data.uncertainty.array = uncertainty
+            reduced_science_images.append(flux_data)
             filenames.append(filename)
     return reduced_science_images, filenames

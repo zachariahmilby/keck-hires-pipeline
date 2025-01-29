@@ -296,6 +296,8 @@ class _WavelengthSolution:
         ions = []
 
         for s, wls in zip(centers_set, wavelengths_set):
+            if len(s) == 0:
+                continue
             left = np.min(s).astype(int) - dx
             right = np.max(s).astype(int) + dx + 1
             if (left < 32) | (right > self._pixels.size-32):
@@ -455,7 +457,8 @@ class _WavelengthSolution:
 
         for n, template in enumerate(templates):
 
-            _log(self._log_path, f'         Template {n+1}/{n_templates}')
+            _log(self._log_path, f'         Template {n+1}/{n_templates}',
+                 new_line=False)
 
             _, spectral_offset = self._cross_correlate_template(template)
 
@@ -503,6 +506,7 @@ class _WavelengthSolution:
                     fit_edges[i] = best_fit_edges
                     solutions[f'order{order}']['residual'] = residual
                     self._solutions_found[i] = success
+
         used_pixels = []
         used_wavelengths = []
         used_ions = []

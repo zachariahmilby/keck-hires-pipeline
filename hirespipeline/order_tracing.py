@@ -34,19 +34,19 @@ class _OrderTraces:
         log_path : Path
             Location of log file.
         optimize : bool
-            Whether or not to optimize the traces beyond the initial fit.
+            Whether or not you want to optimize the traces.
         """
         self._master_trace = master_trace
         self._log_path = log_path
-        self._optimize = optimize
         self._normalized_data = self._process_data(master_trace.data)
         self._n_rows, self._n_cols = self._master_trace.data.shape
         self._selected_pixels = np.arange(0, self._n_cols, 128, dtype=int)
         self._starting_points = self._get_starting_points()
         self._pixels = np.arange(self._n_cols)
-        self._traces = self._select_traces()
         if optimize:
             self._traces = self._refine_traces()
+        else:
+            self._traces = self._select_traces()
 
     @staticmethod
     def _process_data(data: np.ndarray) -> np.ndarray:
@@ -126,6 +126,7 @@ class _OrderTraces:
             x = np.arange(len(good))
             start = bad_extended[0]
             peaks = peaks[good]
+
             fit = self._fit_polynomial(y=peaks[:start], x=x[:start], degree=5)
             pct = np.abs(1 - peaks / fit.eval(x=x))
             ind = np.where(pct > 0.05)[0]
@@ -144,6 +145,7 @@ class _OrderTraces:
         extrapolated_peaks = fit.eval(x=np.arange(-10, len(peaks)+11))
         ind = np.where((extrapolated_peaks > 0) &
                        (extrapolated_peaks < self._n_rows))[0]
+
         return extrapolated_peaks[ind]
 
     def _find_initial_traces(self) -> np.ndarray:
@@ -165,7 +167,7 @@ class _OrderTraces:
                         center = trace[j]
                     fit = self._fit_polynomial(trace, self._selected_pixels, 3)
                     rsquare = 1 - fit.residual.var() / np.var(trace)
-                    if rsquare > 0.9999:
+                    if rsquare > 0.999:
                         traces[i] = fit.eval(x=self._pixels)
                 except (IndexError, TypeError, ValueError):
                     continue
@@ -208,7 +210,7 @@ class _OrderTraces:
         polynomial to the result to get the tightest best-fit trace.
         """
         _log(self._log_path, f'   Refining traces...')
-        selected_traces = self._traces
+        selected_traces = self._select_traces()
         refined_traces = np.zeros_like(selected_traces)
         slit_half_width = self._calculate_slit_half_length()
         shape = self._normalized_data.data.shape
@@ -255,7 +257,8 @@ class _OrderTraces:
         xlim = axis.get_xlim()
         axis.axvspan(xlim[0], xlim[-1], color=nan_color, zorder=1)
         axis.set_xlim(xlim)
-        axis.set_ylim(np.min(self._traces) - 10, np.max(self._traces) + 10)
+        axis.set_ylim(np.nanmin(self._traces) - 10,
+                      np.nanmax(self._traces) + 10)
         savepath = Path(file_path, 'quality_assurance', 'order_traces.jpg')
         make_directory(savepath.parent)
         plt.savefig(savepath, dpi=600)

@@ -176,8 +176,8 @@ class HIRESPipeline:
             self._gain = gain
         _make_log(self._save_directory)
 
-    def log(self, string: str):
-        _log(self._save_directory, string)
+    def log(self, string: str, new_line: bool = True) -> None:
+        _log(self._save_directory, string, new_line=new_line)
 
     @staticmethod
     def _determine_input_type(science_subdirectory) -> list[str]:
@@ -269,7 +269,8 @@ class HIRESPipeline:
     def run(self,
             save_graphics: bool = True,
             test_trace: bool = False,
-            optimize_traces: bool = True):
+            optimize_traces: bool = True,
+            remove_airmass_extinction: bool = True):
         """
         Run the HIRES pipeline.
 
@@ -281,7 +282,7 @@ class HIRESPipeline:
             best, but if the pipeline ends up crashing it might be best to try
             to save files without summary graphics.
 
-            Note: it will still save the trace and order edge graphics, since
+            Note: it will always save the trace and order edge graphics, since
             those are essential for quality assurance.
         test_trace: bool
             If you want to run the pipeline just far enough to test the order
@@ -290,6 +291,12 @@ class HIRESPipeline:
         optimize_traces : bool
             Whether or not you want to optimize the traces. Setting to False
             improves speed and may prevent bad traces near detector edges.
+            Default is True.
+        remove_airmass_extinction: bool
+            Whether or not you want to remove wavelength-dependent airmass
+            extinction appropriate to the summit of Maunakea. Default is True.
+            Uses the median curve in Figure 17 of Buton et al. (2003),
+            doi:10.1051/0004-6361/201219834.
         """
         t0 = datetime.now(timezone.utc)
         print('')
@@ -306,7 +313,8 @@ class HIRESPipeline:
             slit_width=self._slit_width,
             spatial_binning=self._spatial_binning,
             spectral_binning=self._spectral_binning,
-            gain=self._gain, log_path=self._save_directory)
+            gain=self._gain,
+            log_path=self._save_directory)
 
         self.log('   Making master flat image...')
         master_flat = _make_master_flux(
@@ -317,7 +325,8 @@ class HIRESPipeline:
             slit_width=self._slit_width,
             spatial_binning=self._spatial_binning,
             spectral_binning=self._spectral_binning,
-            gain=self._gain, log_path=self._save_directory)
+            gain=self._gain,
+            log_path=self._save_directory)
 
         self.log('   Making master arc image...')
         master_arc = _make_master_flux(file_directory=self._file_directory,
@@ -332,12 +341,14 @@ class HIRESPipeline:
 
         self.log('   Making master trace image...')
         master_trace = _make_master_trace(
-            file_directory=self._file_directory, master_bias=master_bias,
+            file_directory=self._file_directory,
+            master_bias=master_bias,
             slit_length=self._slit_length,
             slit_width=self._slit_width,
             spatial_binning=self._spatial_binning,
             spectral_binning=self._spectral_binning,
-            gain=self._gain, log_path=self._save_directory)
+            gain=self._gain,
+            log_path=self._save_directory)
         self.log('   Tracing echelle orders...')
         order_traces = _OrderTraces(master_trace=master_trace,
                                     log_path=self._save_directory,
@@ -353,8 +364,10 @@ class HIRESPipeline:
 
             self.log('   Calculating wavelength solution...')
             wavelength_solution = _WavelengthSolution(
-                master_arc=master_arc, master_flat=master_flat,
-                order_bounds=order_bounds, log_path=self._save_directory)
+                master_arc=master_arc,
+                master_flat=master_flat,
+                order_bounds=order_bounds,
+                log_path=self._save_directory)
             wavelength_solution.quality_assurance(Path(self._save_directory))
 
             self.log('   Rectifying master bias...')
@@ -366,7 +379,8 @@ class HIRESPipeline:
                 savepath=Path(self._save_directory, 'master_bias.fits.gz'))
             if save_graphics:
                 _calibration_qa_graphic(
-                    rectified_data=rectified_master_bias, cmap=bias_cmap(),
+                    rectified_data=rectified_master_bias,
+                    cmap=bias_cmap(),
                     savename=Path(self._save_directory, 'quality_assurance',
                                   'master_bias.jpg'))
 
@@ -379,7 +393,8 @@ class HIRESPipeline:
                 savepath=Path(self._save_directory, 'master_flat.fits.gz'))
             if save_graphics:
                 _calibration_qa_graphic(
-                    rectified_data=rectified_master_flat, cmap=flux_cmap(),
+                    rectified_data=rectified_master_flat,
+                    cmap=flux_cmap(),
                     savename=Path(self._save_directory, 'quality_assurance',
                                   'master_flat.jpg'))
 
@@ -392,7 +407,8 @@ class HIRESPipeline:
                 savepath=Path(self._save_directory, 'master_arc.fits.gz'))
             if save_graphics:
                 _calibration_qa_graphic(
-                    rectified_data=rectified_master_arc, cmap=flux_cmap(),
+                    rectified_data=rectified_master_arc,
+                    cmap=flux_cmap(),
                     savename=Path(self._save_directory, 'quality_assurance',
                                   'master_arc.jpg'))
 
@@ -412,7 +428,9 @@ class HIRESPipeline:
                     slit_width=self._slit_width,
                     spatial_binning=self._spatial_binning,
                     spectral_binning=self._spectral_binning,
-                    gain=self._gain, log_path=self._save_directory)
+                    gain=self._gain,
+                    extinction_correct=remove_airmass_extinction,
+                    log_path=self._save_directory)
                 self.log(f'      Saving data...')
                 count = len(science_images)
                 for i, (image, filename) in enumerate(
@@ -421,15 +439,18 @@ class HIRESPipeline:
                         ext = '.fits.gz'
                     else:
                         ext = '.fits'
-                    self.log(f'         {i + 1}/{count}: {filename}')
+                    self.log(f'         {i + 1}/{count}: {filename}',
+                             new_line=False)
                     self._save_science_file(
-                        reduced_data=image, target=target,
+                        reduced_data=image,
+                        target=target,
                         wavelength_solution=wavelength_solution,
                         savepath=Path(self._save_directory, sub_directory,
                                       filename.replace(ext, f'_reduced{ext}')))
                     if save_graphics:
                         _science_qa_graphic(
-                            rectified_data=image, cmap=flux_cmap(),
+                            rectified_data=image,
+                            cmap=flux_cmap(),
                             savename=Path(self._save_directory, sub_directory,
                                           filename.replace(ext, '_reduced.jpg')
                                           ))

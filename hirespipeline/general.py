@@ -39,13 +39,18 @@ def _write_log(path: Path,
 
 
 def _log(path, string,
-         silent: bool = False) -> None:
+         silent: bool = False,
+         new_line: bool = True) -> None:
     """
     Wrapper function to log a string and optionally print it in the terminal.
     """
     _write_log(path, string)
     if not silent:
-        print(string)
+        print("\33[2K\r", end="")
+        if not new_line:
+            print(string, end='\r')
+        else:
+            print(string)
 
 
 def air_to_vac(wavelength: u.Quantity) -> u.Quantity:

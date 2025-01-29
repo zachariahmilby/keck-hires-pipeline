@@ -32,8 +32,13 @@ HIRES data (I imagine the use of different filters may change how well it
 operates). However, in the scientific spirit, I've made this repository public 
 so anyone can take and modify what I've done here.
 
-**Update February 15, 2023:** It ran successfully *without modification* on a 
-set of Jupiter observations taken by a colleague.
+> **NOTES**<br>
+> **February 15, 2023:** It ran successfully *without modification* on a 
+> set of Jupiter observations taken by a colleague.<br>
+> **January 29, 2025:** Tried to run with some data taken under high-gain mode
+> and the calculation of the wavelength solution failed, but worked with the 
+> same echelle/cross-disperser angles in low-gain mode. Almost no one seems to 
+> use high gain, so I am not inclined to work on this further.
 
 [^1]: https://pypeit.readthedocs.io/en/release/
 [^2]: https://www2.keck.hawaii.edu/inst/hires/
@@ -149,14 +154,28 @@ a few quality-assurance graphics showing the traces, echelle order bounds, and
 identified order numbers and wavelength bounds so you can see if it worked well 
 or not.
 
+There are several optional boolean arguments to `run()`. `save_graphics` 
+toggles whether or not to save a summary graphic along with the reduced data 
+files. There are memory leaks in Matplotlib, and I've done by best, but if the 
+pipeline ends up crashing it might be best to try to save files without summary 
+graphics. It will always save the trace and order edge graphics, since those 
+are essential for quality assurance. `test_trace` toggles whether you want to 
+run the pipeline just far enough to test the order detection algorithm, set 
+this to True. Mostly useful for my own debugging purposes. `optimize_traces` 
+toggles whether or not you want to optimize the traces. Setting to False
+improves speed and may prevent bad traces near detector edges. Default is True.
+`remove_airmass_extinction` toggles whether or not you want to remove 
+wavelength-dependent airmass extinction appropriate to the summit of Maunakea. 
+Default is True. Uses the median curve in Figure 17 of Buton et al. (2003)[^5].
+
 The pipeline performs the following reduction steps (and propagates error 
 appropriately at each step):
 1. Create and subtract master bias,
 2. Create and divide by a normalized master flat field,
 3. Rectify orders,
 4. Calculate wavelength solution, and
-5. Set flux to an airmass of zero by removing wavelength-dependent extinction 
-   as described in Buton et al. (2003)[^5].
+5. [Optional] Set flux to an airmass of zero by removing wavelength-dependent 
+   extinction as described in Buton et al. (2003)[^5].
 
 > **NOTE**<br>
 > The wavelength solution should be accurate to within one slit width or so. If
