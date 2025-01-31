@@ -216,7 +216,7 @@ class _OrderTraces:
         shape = self._normalized_data.data.shape
         n = selected_traces.shape[0]
         for i, trace in enumerate(selected_traces):
-            _log(self._log_path, f'      Order {i + 1}/{n}')
+            _log(self._log_path, f'      Order {i + 1}/{n}', new_line=False)
             ub = trace + slit_half_width  # noqa
             lb = trace - slit_half_width  # noqa
             if (np.max(ub) > shape[0] - 1) or (np.min(lb) < 0):
